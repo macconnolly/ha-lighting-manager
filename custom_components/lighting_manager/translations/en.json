@@ -1,0 +1,43 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Create Lighting Zone",
+        "description": "Set up a new lighting zone with layered control",
+        "data": {
+          "zone_name": "Zone Name",
+          "light_entities": "Lights"
+        },
+        "data_description": {
+          "zone_name": "Display name for this lighting zone",
+          "light_entities": "Select lights to control in this zone"
+        }
+      }
+    },
+    "error": {
+      "duplicate_zone": "A zone with this name already exists",
+      "no_lights": "Please select at least one light",
+      "unknown": "Unexpected error"
+    },
+    "abort": {
+      "already_configured": "Zone is already configured"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Zone Settings",
+        "description": "Configure zone behavior",
+        "data": {
+          "light_entities": "Lights",
+          "default_transition": "Default Transition Time (seconds)",
+          "adaptive_enabled": "Enable Built-in Adaptive Lighting",
+          "adaptive_brightness_min": "Minimum Brightness (%)",
+          "adaptive_brightness_max": "Maximum Brightness (%)",
+          "adaptive_color_temp_min": "Minimum Color Temperature (K)",
+          "adaptive_color_temp_max": "Maximum Color Temperature (K)"
+        }
+      }
+    }
+  }
+}
