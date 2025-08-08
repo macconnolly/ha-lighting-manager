@@ -35,13 +35,35 @@ Transform layers from hidden dictionary entries to **first-class Home Assistant 
   - [ ] `unique_id` for entity registry
   - [ ] `device_info` for grouping under zone device
   - [ ] `entity_category` as `CONFIG` for UI organization
-- [ ] Implement stateless property getters from coordinator:
-  - [ ] `is_on` property: Read from `coordinator.data["layers"][layer_id]["is_on"]`
-  - [ ] `available` property: Based on coordinator availability
-  - [ ] `extra_state_attributes`: Read ALL attributes from coordinator data
-    - [ ] zone_id, layer_name, priority, brightness, color_temp, etc.
-    - [ ] All values come from coordinator, switch stores NOTHING
+- [ ] Implement stateless property getters from coordinator (GOLDEN PATH):
+  ```python
+  @property
+  def is_on(self) -> bool:
+      """Read ONLY from coordinator.data"""
+      layer_data = self.coordinator.data.get("layers", {}).get(self.layer_id, {})
+      return layer_data.get("is_on", False)
+  
+  @property
+  def available(self) -> bool:
+      """Available when coordinator is available."""
+      return self.coordinator.last_update_success
+  
+  @property
+  def extra_state_attributes(self):
+      """Expose ALL layer state as attributes."""
+      layer_data = self.coordinator.data.get("layers", {}).get(self.layer_id, {})
+      return {
+          "priority": layer_data.get("priority"),
+          "brightness": layer_data.get("brightness"),
+          "color_temp": layer_data.get("color_temp"),
+          "created_at": layer_data.get("created_at"),
+          "last_modified": layer_data.get("last_modified"),
+          "zone_id": self.coordinator.zone_id,
+          "layer_name": self.layer_name
+      }
+  ```
   - [ ] CRITICAL: coordinator.data must be a property that returns {"layers": self.layers}
+  - [ ] All values come from coordinator, switch stores NOTHING
 - [ ] Implement switch methods that call coordinator:
   - [ ] `async_turn_on()`: Call `coordinator.update_layer(layer_id, is_on=True, **kwargs)`
   - [ ] `async_turn_off()`: Call `coordinator.update_layer(layer_id, is_on=False)`
@@ -106,31 +128,93 @@ Transform layers from hidden dictionary entries to **first-class Home Assistant 
 ### PHASE 1.5: Core Fixes and Validation
 **Goal**: Ensure foundation is rock-solid before adding complexity
 
-#### Task 1.5.1: Fix Coordinator Data Model
-- [ ] Implement `data` as a property, not from `_async_update_data()`:
+#### Task 1.5.1: Coordinator Data Model (GOLDEN PATH)
+- [ ] Implement `data` as a property that ALWAYS returns current state:
   ```python
   @property
   def data(self):
-      """Always return current state - single source of truth."""
-      return {"layers": self.layers, ...}
+      """CRITICAL: Always return current state - single source of truth."""
+      return {
+          "layers": self.layers,  # Direct reference, not copy
+          "active_layers": [l for l in self.layers.values() if l.get("is_on", False)],
+          "zone_id": self.zone_id,
+          "last_updated": dt_util.now()
+      }
   ```
-- [ ] Remove @callback from async methods
-- [ ] Ensure all state-modifying methods are async
-- [ ] Add proper error handling to all methods
-
-#### Task 1.5.2: Add Input Validation
-- [ ] Create validation helper functions:
+- [ ] NEVER use @callback on methods that modify state
+- [ ] ALL state-modifying methods must be async:
   ```python
-  def validate_brightness(value: Any) -> int:
-      """Validate and clamp brightness 0-255."""
+  async def update_layer(self, layer_id: str, **updates):
+      """Update layer - MUST be async, not @callback."""
+      if layer_id not in self.layers:
+          self.layers[layer_id] = {}
+      
+      # Validate all updates
+      if "brightness" in updates:
+          updates["brightness"] = validate_brightness(updates["brightness"])
+      
+      # Update timestamp
+      updates["last_modified"] = dt_util.now()
+      
+      # Apply updates
+      self.layers[layer_id].update(updates)
+      
+      # Save and notify
+      await self.save_layers()
+      self.async_update_listeners()  # Triggers switch updates
+  ```
+
+#### Task 1.5.2: Input Validation Functions (COMPLETE SET)
+- [ ] Create ALL validation helper functions in `validation.py`:
+  ```python
+  from homeassistant.util import slugify, dt_util
+  
+  def validate_layer_name(name: str) -> str:
+      """Validate and slugify layer name."""
+      if not isinstance(name, str) or len(name.strip()) == 0:
+          raise ValueError("Layer name must be non-empty string")
+      if len(name) > 50:
+          raise ValueError("Layer name too long (max 50 chars)")
+      slugified = slugify(name)
+      if not slugified:
+          raise ValueError(f"Layer name '{name}' results in empty slug")
+      return slugified
+  
+  def validate_brightness(value: any) -> int:
+      """Validate brightness 0-255."""
+      if value is None:
+          return None
       try:
           val = int(value)
-          return max(0, min(255, val))
-      except (TypeError, ValueError):
-          raise ValueError(f"Invalid brightness: {value}")
+          if val < 0 or val > 255:
+              raise ValueError(f"Brightness must be 0-255, got {val}")
+          return val
+      except (TypeError, ValueError) as e:
+          raise ValueError(f"Invalid brightness: {value}") from e
+  
+  def validate_color_temp(value: any) -> int:
+      """Validate color temperature 153-500 mireds."""
+      if value is None:
+          return None
+      try:
+          val = int(value)
+          if val < 153 or val > 500:
+              raise ValueError(f"Color temp must be 153-500 mireds, got {val}")
+          return val
+      except (TypeError, ValueError) as e:
+          raise ValueError(f"Invalid color_temp: {value}") from e
+  
+  def validate_priority(value: any) -> int:
+      """Validate priority 0-100."""
+      try:
+          val = int(value)
+          if val < 0 or val > 100:
+              raise ValueError(f"Priority must be 0-100, got {val}")
+          return val
+      except (TypeError, ValueError) as e:
+          raise ValueError(f"Invalid priority: {value}") from e
   ```
-- [ ] Validate ALL user inputs before storage
-- [ ] Use `dt_util.now()` for timezone-aware timestamps
+- [ ] ALWAYS use `dt_util.now()` for timezone-aware timestamps (NEVER `datetime.now()`)
 
 #### Task 1.5.3: Fix Storage Implementation
 - [ ] Add validation on load:
@@ -144,11 +228,49 @@ Transform layers from hidden dictionary entries to **first-class Home Assistant 
 - [ ] Handle corrupted data gracefully
 - [ ] Add version migration support
 
-#### Task 1.5.4: Fix Service Implementation
-- [ ] Rewrite using proper entity targeting
-- [ ] Register at domain level, not per zone
-- [ ] Add comprehensive input validation
-- [ ] Use entity registry properly
+#### Task 1.5.4: Service Implementation (GOLDEN PATH)
+- [ ] Use EXACT pattern for proper entity targeting:
+  ```python
+  from homeassistant.helpers import entity_registry as er
+  from homeassistant.helpers.service import async_extract_referenced_entity_ids
+  
+  async def handle_create_layer(call: ServiceCall) -> None:
+      """GOLDEN PATH: Proper service implementation."""
+      # Extract entities properly
+      referenced = async_extract_referenced_entity_ids(hass, call)
+      entity_ids = referenced.referenced | referenced.indirectly_referenced
+      
+      # Use entity registry to find our switch entities
+      entity_reg = er.async_get(hass)
+      coordinators_to_update = set()
+      
+      for entity_id in entity_ids:
+          entry = entity_reg.async_get(entity_id)
+          if entry and entry.platform == DOMAIN and "layer" in entry.entity_id:
+              # Get coordinator from the config entry
+              config_entry_id = entry.config_entry_id
+              coordinator = hass.data[DOMAIN][config_entry_id]["coordinator"]
+              
+              # Validate ALL inputs before calling coordinator
+              layer_name = validate_layer_name(call.data["layer_name"])
+              priority = validate_priority(call.data["priority"])
+              
+              # Call coordinator method
+              await coordinator.create_layer(
+                  layer_name=layer_name,
+                  priority=priority,
+                  brightness=call.data.get("brightness"),
+                  color_temp=call.data.get("color_temp")
+              )
+              coordinators_to_update.add(coordinator)
+      
+      # Trigger coordinator updates
+      for coordinator in coordinators_to_update:
+          await coordinator.async_refresh()
+  ```
+- [ ] Register services ONCE at domain level in __init__.py
+- [ ] NEVER manually parse entity IDs
+- [ ] Validate ALL inputs before passing to coordinator
 
 ### PHASE 2: Orchestration Engine
 **Goal**: Build the reactive calculation and application engine
@@ -558,6 +680,43 @@ Transform layers from hidden dictionary entries to **first-class Home Assistant 
 
 ### PHASE 7: Testing & Validation
 **Goal**: Ensure reliability and performance
+
+#### Task 7.0: Critical Test Points (MUST PASS)
+- [ ] Test coordinator data property:
+  ```python
+  # Test 1: Coordinator data property returns layers directly
+  coordinator = ZoneCoordinator(hass, "living_room", ["light.ceiling"])
+  coordinator.layers["test_layer"] = {"is_on": True, "priority": 50}
+  assert coordinator.data["layers"]["test_layer"]["is_on"] == True
+  assert coordinator.data["layers"] is coordinator.layers  # Same object!
+  ```
+- [ ] Test switch reads from coordinator:
+  ```python
+  # Test 2: Switch reads from coordinator, stores nothing
+  switch = LayerSwitch(coordinator, "test_layer", "Test Layer")
+  assert switch.is_on == True  # Must read from coordinator
+  assert not hasattr(switch, "_is_on")  # Must not store state
+  ```
+- [ ] Test service entity targeting:
+  ```python
+  # Test 3: Service finds entities correctly
+  # Must use entity registry, not string parsing
+  ```
+- [ ] Test validation:
+  ```python
+  # Test 4: All validations work
+  assert validate_brightness(150) == 150
+  with pytest.raises(ValueError):
+      validate_brightness(300)
+  assert validate_layer_name("Living Room") == "living_room"
+  ```
+- [ ] Test timezone handling:
+  ```python
+  # Test 5: Timezone aware timestamps
+  from homeassistant.util import dt_util
+  timestamp = dt_util.now()
+  assert timestamp.tzinfo is not None
+  ```
 
 #### Task 7.1: Unit Tests
 - [ ] Test calculator logic:
