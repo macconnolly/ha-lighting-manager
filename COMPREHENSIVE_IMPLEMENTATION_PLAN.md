@@ -41,6 +41,7 @@ Transform layers from hidden dictionary entries to **first-class Home Assistant 
   - [ ] `extra_state_attributes`: Read ALL attributes from coordinator data
     - [ ] zone_id, layer_name, priority, brightness, color_temp, etc.
     - [ ] All values come from coordinator, switch stores NOTHING
+  - [ ] CRITICAL: coordinator.data must be a property that returns {"layers": self.layers}
 - [ ] Implement switch methods that call coordinator:
   - [ ] `async_turn_on()`: Call `coordinator.update_layer(layer_id, is_on=True, **kwargs)`
   - [ ] `async_turn_off()`: Call `coordinator.update_layer(layer_id, is_on=False)`
@@ -102,6 +103,53 @@ Transform layers from hidden dictionary entries to **first-class Home Assistant 
   return self.async_create_entry(title="", data=options_data)
   ```
 
+### PHASE 1.5: Core Fixes and Validation
+**Goal**: Ensure foundation is rock-solid before adding complexity
+
+#### Task 1.5.1: Fix Coordinator Data Model
+- [ ] Implement `data` as a property, not from `_async_update_data()`:
+  ```python
+  @property
+  def data(self):
+      """Always return current state - single source of truth."""
+      return {"layers": self.layers, ...}
+  ```
+- [ ] Remove @callback from async methods
+- [ ] Ensure all state-modifying methods are async
+- [ ] Add proper error handling to all methods
+
+#### Task 1.5.2: Add Input Validation
+- [ ] Create validation helper functions:
+  ```python
+  def validate_brightness(value: Any) -> int:
+      """Validate and clamp brightness 0-255."""
+      try:
+          val = int(value)
+          return max(0, min(255, val))
+      except (TypeError, ValueError):
+          raise ValueError(f"Invalid brightness: {value}")
+  ```
+- [ ] Validate ALL user inputs before storage
+- [ ] Use `dt_util.now()` for timezone-aware timestamps
+
+#### Task 1.5.3: Fix Storage Implementation
+- [ ] Add validation on load:
+  ```python
+  stored = await self._store.async_load()
+  if stored and self._validate_storage(stored):
+      self.layers = stored["layers"]
+  else:
+      self.layers = {}
+  ```
+- [ ] Handle corrupted data gracefully
+- [ ] Add version migration support
+
+#### Task 1.5.4: Fix Service Implementation
+- [ ] Rewrite using proper entity targeting
+- [ ] Register at domain level, not per zone
+- [ ] Add comprehensive input validation
+- [ ] Use entity registry properly
+
 ### PHASE 2: Orchestration Engine
 **Goal**: Build the reactive calculation and application engine
 
@@ -117,29 +165,31 @@ Transform layers from hidden dictionary entries to **first-class Home Assistant 
   - [ ] Load layers from `.storage/lighting_manager_{zone_id}.json` on startup
   - [ ] Save layers on every state change (debounced)
   - [ ] Handle migration from old format if needed
-- [ ] Implement layer management methods:
-  - [ ] `create_layer(layer_name, priority, **attributes)`: Add new layer to dict
-  - [ ] `update_layer(layer_id, **updates)`: Update layer attributes
-  - [ ] `delete_layer(layer_id)`: Remove layer from dict
-  - [ ] `get_layer(layer_id)`: Return layer data
+- [ ] Implement layer management methods (NO @callback decorator - these modify state!):
+  - [ ] `async create_layer(layer_name, priority, **attributes)`: Add new layer to dict
+  - [ ] `async update_layer(layer_id, **updates)`: Update layer attributes
+  - [ ] `async delete_layer(layer_id)`: Remove layer from dict
+  - [ ] `get_layer(layer_id)`: Return layer data (read-only, can be sync)
   - [ ] All methods trigger refresh after changes
+  - [ ] CRITICAL: Methods that modify state must be async, NOT @callback
 - [ ] Set up debounced refresh:
   - [ ] Implement proper 100ms debouncing with timer
   - [ ] Collect all pending updates during debounce window
   - [ ] Single recalculation after debounce expires
-- [ ] Implement `_async_update_data()`:
-  - [ ] Get all active layers from self.layers
-  - [ ] Call calculator for final state
-  - [ ] Return complete data structure:
+- [ ] Implement coordinator.data property (NOT _async_update_data for now):
+  - [ ] Simple property that returns current state:
     ```python
-    {
-        "layers": self.layers,  # All layer states
-        "winning_layer": "layer_id",
-        "final_state": {...},
-        "conflicts": [],
-        "calculation_time_ms": 12
-    }
+    @property
+    def data(self):
+        """Single source of truth - always returns current layers."""
+        return {
+            "layers": self.layers,  # Direct reference to layer dict
+            "active_layers": [l for l in self.layers.values() if l.get("is_on")],
+            "winning_layer": None,  # Phase 2 will calculate
+            "final_state": {},  # Phase 2 will calculate
+        }
     ```
+  - [ ] Phase 2 will add _async_update_data() for calculations
 - [ ] Handle coordinator lifecycle:
   - [ ] Load from Store on initialization
   - [ ] Save to Store on shutdown
@@ -224,16 +274,42 @@ Transform layers from hidden dictionary entries to **first-class Home Assistant 
 ### PHASE 3: Layer Management Services
 **Goal**: Create intuitive API for layer control
 
+#### Task 3.0: Service Implementation Pattern (CRITICAL)
+- [ ] Use Home Assistant's proper service patterns:
+  ```python
+  from homeassistant.helpers import entity_registry as er
+  from homeassistant.helpers.service import async_extract_referenced_entity_ids
+  
+  async def handle_create_layer(call: ServiceCall) -> None:
+      """Proper service implementation."""
+      # Extract entities properly
+      referenced = async_extract_referenced_entity_ids(hass, call)
+      entity_ids = referenced.referenced | referenced.indirectly_referenced
+      
+      # Use entity registry to find our entities
+      entity_reg = er.async_get(hass)
+      for entity_id in entity_ids:
+          entry = entity_reg.async_get(entity_id)
+          if entry and entry.platform == DOMAIN:
+              # Get coordinator from entry's config_entry_id
+              coordinator = hass.data[DOMAIN][entry.config_entry_id][DATA_COORDINATOR]
+              # Now work with coordinator
+  ```
+- [ ] NEVER manually parse entity IDs or search through hass.data
+- [ ] Register services once at domain level, not per zone
+
 #### Task 3.1: Layer Creation Service
 - [ ] Service: `create_layer`
 - [ ] Parameters:
-  - [ ] zone_id: Target zone
+  - [ ] zone_id: Target zone (via entity targeting)
   - [ ] layer_name: Unique name (will be slugified)
-  - [ ] priority: Initial priority
-  - [ ] auto_remove: Remove when inactive
+  - [ ] priority: Initial priority (validate 0-100)
+  - [ ] brightness: Optional (validate 0-255)
+  - [ ] color_temp: Optional (validate 153-500 mireds)
 - [ ] Implementation:
-  - [ ] Get coordinator for the zone from hass.data
-  - [ ] Call `coordinator.create_layer(layer_name, priority, **kwargs)`
+  - [ ] Use proper entity targeting (see Task 3.0)
+  - [ ] Validate ALL input parameters
+  - [ ] Call `await coordinator.create_layer(layer_name, priority, **kwargs)`
   - [ ] Coordinator adds layer to its internal dictionary
   - [ ] Coordinator saves to Store
   - [ ] Get add_entities callback from hass.data
@@ -597,6 +673,42 @@ Given your test instance availability, I recommend this order:
 - Every lighting decision traceable to specific layers
 - Zero race conditions
 - Clean separation of concerns
+
+## Critical Implementation Requirements
+
+### Threading Model Rules (MUST FOLLOW)
+1. **@callback decorator**: Only for SYNCHRONOUS methods that don't modify state
+2. **async methods**: Required for ANY method that modifies state or does I/O
+3. **DataUpdateCoordinator**: The `data` property should be simple, `_async_update_data()` does calculations
+
+### Data Flow Requirements
+1. **Single source of truth**: `coordinator.layers` is THE state, `coordinator.data` is a property that returns it
+2. **No dual state**: Never have separate write location and read location
+3. **Validation**: ALL user input must be validated before storage
+
+### Service Implementation Rules
+1. **Use entity registry**: Never manually parse entity IDs
+2. **Use proper helpers**: `async_extract_referenced_entity_ids()` for entity targeting
+3. **Domain-level registration**: Services registered once, not per zone
+
+### Required Validations
+- **Brightness**: 0-255 integer
+- **Color temp**: 153-500 mireds (or 2000-6500 Kelvin converted)
+- **RGB color**: Tuple of 3 integers 0-255
+- **Priority**: 0-100 integer
+- **Transition**: 0.0-300.0 float (seconds)
+- **Layer names**: Slugified for entity ID compatibility
+- **Datetime**: Always use timezone-aware (`dt_util.now()` not `datetime.now()`)
+
+### Storage Requirements
+1. **Validate on load**: Check data structure and types
+2. **Handle corruption**: Graceful fallback to empty state
+3. **Atomic saves**: Use Store's built-in safety
+
+### Platform Requirements
+1. **sensor.py**: Must exist even if empty (declared in PLATFORMS)
+2. **services.yaml**: Must define all services with proper schemas
+3. **translations**: Must include all user-facing strings
 
 ## Lessons Learned from Initial Implementation
 
