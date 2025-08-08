@@ -1,5 +1,8 @@
 # Lighting Manager Modernization Plan: From Legacy to Layer-First Architecture
 
+> **SUPERSEDED** - This was the initial conceptual plan.
+> See COMPREHENSIVE_IMPLEMENTATION_PLAN.md for the actual implementation plan.
+
 ## Executive Summary
 
 This plan transforms the legacy `lighting_manager` custom component into a modern, architecturally pure Home Assistant integration. The core innovation is elevating layers from internal data structures to first-class Home Assistant entities, creating total observability and a reactive, event-driven system.

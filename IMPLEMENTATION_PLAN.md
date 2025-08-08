@@ -1,3 +1,8 @@
+# Implementation Plan (Early Version)
+
+> **SUPERSEDED** - This was an early implementation outline.
+> See COMPREHENSIVE_IMPLEMENTATION_PLAN.md for the actual implementation plan.
+
 ## 1. Vision & Guiding Principles
 
 This document is the definitive engineering blueprint for modernizing the `lighting_manager` custom component. It is designed to be a complete guide for a developer of average proficiency to create a best-in-class Home Assistant integration that is architecturally pure, observable, and maintainable, fulfilling all specifications in `REQUIREMENTS.md`.
