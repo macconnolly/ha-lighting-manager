@@ -396,6 +396,105 @@ Transform layers from hidden dictionary entries to **first-class Home Assistant 
   - [ ] Removal/unload
   - [ ] Reload on options change
 
+### PHASE 2.5: Event Implementation Fixes
+**Priority: CRITICAL - Missing Required Events (REQ-S011, REQ-S012)**
+**Goal**: Complete event system for full observability
+
+#### Task 2.5.1: Add conflict_detected Event
+**File**: `coordinator.py`
+**Location**: In `_async_update_data()` method after calculation
+
+**Implementation Specification**:
+```python
+# After result = self._calculator.calculate_state(active_layers)
+conflicts = result.get("conflicts", [])
+if conflicts:  # Only fire if conflicts exist
+    # Determine resolution reason
+    winning_layer = result.get("winning_layer")
+    resolution_reason = "no_winner"
+    if winning_layer:
+        winning_data = next((l for l in active_layers if l["layer_id"] == winning_layer), None)
+        if winning_data:
+            if winning_data.get("force"):
+                resolution_reason = "force_flag"
+            elif winning_data.get("locked"):
+                resolution_reason = "locked_layer"
+            else:
+                resolution_reason = f"priority_{winning_data.get('priority', 0)}"
+    
+    self.hass.bus.async_fire(
+        EVENT_CONFLICT_DETECTED,
+        {
+            "zone_id": self.zone_id,
+            "conflicts": conflicts,
+            "resolution": winning_layer,
+            "resolution_reason": resolution_reason,
+            "affected_layers": [
+                {
+                    "layer_id": l["layer_id"],
+                    "priority": l.get("priority", 0),
+                    "force": l.get("force", False),
+                    "locked": l.get("locked", False),
+                }
+                for l in active_layers
+            ],
+            "timestamp": dt_util.now().isoformat(),
+        },
+    )
+```
+
+**Requirements Fulfilled**: REQ-S011, REQ-O013
+
+#### Task 2.5.2: Add state_applied Event  
+**File**: `light_control.py`
+**Location**: In `apply_state()` method after light service calls
+
+**Implementation Specification**:
+```python
+# Track timing
+start_time = dt_util.now()
+
+# ... existing light service calls ...
+
+# After successful application
+application_time = (dt_util.now() - start_time).total_seconds() * 1000
+
+# Determine which lights succeeded
+lights_succeeded = [
+    light for light in self.light_entities 
+    if light not in self._unavailable_lights
+]
+
+# Fire event with comprehensive details
+self.hass.bus.async_fire(
+    EVENT_STATE_APPLIED,
+    {
+        "zone_id": self.zone_id,
+        "lights": self.light_entities,
+        "lights_succeeded": lights_succeeded,
+        "lights_unavailable": list(self._unavailable_lights),
+        "final_state": final_state,
+        "source_layer": final_state.get("source"),
+        "application_time_ms": application_time,
+        "timestamp": dt_util.now().isoformat(),
+    },
+)
+```
+
+**Requirements Fulfilled**: REQ-S012
+
+#### Task 2.5.3: Import Missing Constants
+**Files to Update**:
+1. `coordinator.py`: Add `EVENT_CONFLICT_DETECTED` to imports from const
+2. `light_control.py`: Already imports `EVENT_STATE_APPLIED` but needs zone_id passed
+
+**Critical Implementation Notes**:
+1. Events MUST fire even on partial success
+2. Always use `dt_util.now()` for timezone awareness
+3. Include enough detail for debugging without exposing sensitive data
+4. Conflict events should explain resolution strategy
+5. State applied events should show actual vs requested state differences
+
 ### PHASE 3: Layer Management Services
 **Goal**: Create intuitive API for layer control
 
@@ -519,18 +618,18 @@ Transform layers from hidden dictionary entries to **first-class Home Assistant 
   - [ ] Set `entity_category` as `DIAGNOSTIC` for UI organization
 
 #### Task 4.2: Event System
-- [ ] Define event types in `const.py`
-- [ ] Fire events from coordinator:
-  - [ ] `lighting_manager.layer_activated`
-  - [ ] `lighting_manager.layer_deactivated`
-  - [ ] `lighting_manager.calculation_complete`
-  - [ ] `lighting_manager.conflict_detected`
-  - [ ] `lighting_manager.state_applied`
-- [ ] Include relevant data in payloads:
-  - [ ] Zone and layer identifiers
-  - [ ] State changes
-  - [ ] Timing information
-  - [ ] Conflict details
+- [x] Define event types in `const.py` - COMPLETE
+- [x] Fire events from coordinator:
+  - [x] `lighting_manager.layer_activated` - IMPLEMENTED in switch.py
+  - [x] `lighting_manager.layer_deactivated` - IMPLEMENTED in switch.py
+  - [x] `lighting_manager.calculation_complete` - IMPLEMENTED in coordinator.py
+  - [ ] `lighting_manager.conflict_detected` - DEFINED but NOT FIRED
+  - [ ] `lighting_manager.state_applied` - DEFINED but NOT FIRED
+- [x] Include relevant data in payloads:
+  - [x] Zone and layer identifiers
+  - [x] State changes
+  - [x] Timing information
+  - [ ] Conflict details - Need to fire conflict_detected event
 
 #### Task 4.3: Device Registry Integration
 - [ ] Create zone device on setup:

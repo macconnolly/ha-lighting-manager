@@ -34,6 +34,7 @@ from .const import (
     DEFAULT_TRANSITION,
     DOMAIN,
     EVENT_CALCULATION_COMPLETE,
+    EVENT_CONFLICT_DETECTED,
     STORAGE_KEY_PREFIX,
     STORAGE_VERSION,
 )
@@ -321,10 +322,67 @@ class ZoneCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # Store calculation result
         self._last_calculation = calc_result
         
+        # Fire conflict event if conflicts detected
+        conflicts = calc_result.get("conflicts", [])
+        if conflicts:
+            # Determine resolution reason
+            winning_layer = calc_result.get("winning_layer")
+            resolution_reason = "no_winner"
+            
+            if winning_layer:
+                # Find the winning layer data
+                winning_data = next(
+                    (l for l in active_layers if l["layer_id"] == winning_layer),
+                    None
+                )
+                if winning_data:
+                    if winning_data.get(ATTR_FORCE):
+                        resolution_reason = "force_flag_override"
+                    elif winning_data.get(ATTR_LOCKED):
+                        resolution_reason = "locked_layer"
+                    else:
+                        resolution_reason = f"highest_priority_{winning_data.get(ATTR_PRIORITY, 0)}"
+            
+            # Determine conflict severity
+            severity = "info"
+            if "multiple_force_flags" in conflicts:
+                severity = "warning"
+            elif "all_layers_locked" in conflicts:
+                severity = "error"
+            
+            self.hass.bus.async_fire(
+                EVENT_CONFLICT_DETECTED,
+                {
+                    "zone_id": self.zone_id,
+                    "conflicts": conflicts,
+                    "severity": severity,
+                    "resolution": winning_layer,
+                    "resolution_reason": resolution_reason,
+                    "affected_layers": [
+                        {
+                            "layer_id": l["layer_id"],
+                            "priority": l.get(ATTR_PRIORITY, 0),
+                            "force": l.get(ATTR_FORCE, False),
+                            "locked": l.get(ATTR_LOCKED, False),
+                        }
+                        for l in active_layers
+                    ],
+                    "timestamp": dt_util.now().isoformat(),
+                }
+            )
+            
+            _LOGGER.info(
+                "Conflict detected in zone %s: %s, resolved with %s (%s)",
+                self.zone_id,
+                conflicts,
+                winning_layer,
+                resolution_reason
+            )
+        
         # Apply to lights
         await self._light_controller.apply_state(calc_result["final_state"])
         
-        # Fire event
+        # Fire calculation complete event
         self.hass.bus.async_fire(
             EVENT_CALCULATION_COMPLETE,
             {

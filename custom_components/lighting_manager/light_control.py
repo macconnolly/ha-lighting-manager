@@ -20,6 +20,7 @@ from homeassistant.components.light import (
 from homeassistant.const import ATTR_ENTITY_ID, STATE_UNAVAILABLE, STATE_UNKNOWN
 from homeassistant.core import HomeAssistant, State
 from homeassistant.helpers import entity_registry as er
+from homeassistant.util import dt as dt_util
 
 from .const import EVENT_STATE_APPLIED
 
@@ -80,6 +81,9 @@ class LightController:
         This method handles different light capabilities and applies
         the state atomically to all lights.
         """
+        # Track timing for performance metrics
+        start_time = dt_util.now()
+        
         # Build service data
         service_data = {
             ATTR_ENTITY_ID: [],
@@ -101,6 +105,7 @@ class LightController:
         # Separate lights by availability and capability
         available_lights = []
         unavailable_lights = []
+        lights_with_reduced_features = []
         
         for entity_id in self.light_entities:
             state = self.hass.states.get(entity_id)
@@ -115,9 +120,13 @@ class LightController:
                     available_lights.append(entity_id)
                 else:
                     # Apply with reduced features
+                    lights_with_reduced_features.append(entity_id)
                     await self._apply_with_reduced_features(entity_id, final_state)
         
         # Apply to all capable lights at once (atomic)
+        success = False
+        error_message = None
+        
         if available_lights:
             service_data[ATTR_ENTITY_ID] = available_lights
             
@@ -128,35 +137,53 @@ class LightController:
                     service_data,
                     blocking=True,
                 )
-                
-                # Fire event
-                self.hass.bus.async_fire(
-                    EVENT_STATE_APPLIED,
-                    {
-                        "zone_id": self.zone_id,
-                        "lights_updated": len(available_lights),
-                        "lights_unavailable": len(unavailable_lights),
-                        "final_state": final_state,
-                    }
-                )
-                
-                _LOGGER.debug("Applied state to %d lights in zone %s",
-                            len(available_lights), self.zone_id)
-                return True
+                success = True
                 
             except Exception as e:
+                error_message = str(e)
                 _LOGGER.error("Failed to apply state to lights in zone %s: %s",
                             self.zone_id, e)
-                return False
+        
+        # Calculate application time
+        application_time_ms = (dt_util.now() - start_time).total_seconds() * 1000
+        
+        # Fire comprehensive state_applied event
+        self.hass.bus.async_fire(
+            EVENT_STATE_APPLIED,
+            {
+                "zone_id": self.zone_id,
+                "lights": self.light_entities,
+                "lights_succeeded": available_lights + lights_with_reduced_features,
+                "lights_unavailable": unavailable_lights,
+                "lights_with_reduced_features": lights_with_reduced_features,
+                "final_state": final_state,
+                "source_layer": final_state.get("source"),
+                "application_time_ms": application_time_ms,
+                "success": success,
+                "error": error_message,
+                "timestamp": dt_util.now().isoformat(),
+            }
+        )
+        
+        if success:
+            _LOGGER.debug(
+                "Applied state to %d lights in zone %s (%.1fms)",
+                len(available_lights) + len(lights_with_reduced_features),
+                self.zone_id,
+                application_time_ms
+            )
         
         if unavailable_lights:
             _LOGGER.warning("%d lights unavailable in zone %s, state queued",
                           len(unavailable_lights), self.zone_id)
         
-        return False
+        return success or len(lights_with_reduced_features) > 0
     
     async def _turn_off_lights(self, final_state: dict[str, Any]) -> bool:
         """Turn off all lights in the zone."""
+        # Track timing for performance metrics
+        start_time = dt_util.now()
+        
         service_data = {
             ATTR_ENTITY_ID: self.light_entities,
         }
@@ -164,6 +191,9 @@ class LightController:
         # Add transition if specified
         if ATTR_TRANSITION in final_state:
             service_data[ATTR_TRANSITION] = final_state[ATTR_TRANSITION]
+        
+        success = False
+        error_message = None
         
         try:
             await self.hass.services.async_call(
@@ -175,25 +205,39 @@ class LightController:
             
             # Clear queued commands
             self._unavailable_queue.clear()
-            
-            # Fire event
-            self.hass.bus.async_fire(
-                EVENT_STATE_APPLIED,
-                {
-                    "zone_id": self.zone_id,
-                    "lights_updated": len(self.light_entities),
-                    "final_state": final_state,
-                }
-            )
-            
-            _LOGGER.debug("Turned off %d lights in zone %s",
-                        len(self.light_entities), self.zone_id)
-            return True
+            success = True
             
         except Exception as e:
+            error_message = str(e)
             _LOGGER.error("Failed to turn off lights in zone %s: %s",
                         self.zone_id, e)
-            return False
+        
+        # Calculate application time
+        application_time_ms = (dt_util.now() - start_time).total_seconds() * 1000
+        
+        # Fire comprehensive state_applied event
+        self.hass.bus.async_fire(
+            EVENT_STATE_APPLIED,
+            {
+                "zone_id": self.zone_id,
+                "lights": self.light_entities,
+                "lights_succeeded": self.light_entities if success else [],
+                "lights_unavailable": [],  # We attempt all lights for turn_off
+                "lights_with_reduced_features": [],
+                "final_state": final_state,
+                "source_layer": final_state.get("source"),
+                "application_time_ms": application_time_ms,
+                "success": success,
+                "error": error_message,
+                "timestamp": dt_util.now().isoformat(),
+            }
+        )
+        
+        if success:
+            _LOGGER.debug("Turned off %d lights in zone %s (%.1fms)",
+                        len(self.light_entities), self.zone_id, application_time_ms)
+        
+        return success
     
     def _light_supports_features(self, state: State, final_state: dict[str, Any]) -> bool:
         """Check if a light supports the requested features.
