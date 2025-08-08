@@ -1,0 +1,571 @@
+# Comprehensive Implementation Plan: Lighting Manager v4.0
+
+## Core Architectural Principle
+Transform layers from hidden dictionary entries to **first-class Home Assistant switch entities** that users can see, control, and automate against. Each layer becomes a visible, manageable switch entity with "on/off" states and rich attributes.
+
+## Complete Task Breakdown
+
+### PHASE 1: Foundation - Entity Platform & Data Models
+**Goal**: Establish the layer entity platform and core data structures
+
+#### Task 1.1: Project Structure Setup
+- [ ] Create `custom_components/lighting_manager/` directory structure
+- [ ] Create `__init__.py` with domain registration
+- [ ] Create `manifest.json` with config_flow enabled
+- [ ] Create `const.py` with all constants
+- [ ] Create `translations/en.json` for UI strings
+- [ ] Define domain constant: `DOMAIN = "lighting_manager"`
+- [ ] Define platform list: `PLATFORMS = ["switch", "sensor"]`
+
+#### Task 1.2: Switch Platform for Layers (`switch.py`)
+- [ ] Create switch platform implementation 
+- [ ] Implement `async_setup_entry()` function
+  - [ ] Register the zone but create NO automatic layers
+  - [ ] Layers are created only via explicit user action
+- [ ] Define `LayerSwitch` class extending `SwitchEntity, RestoreEntity, CoordinatorEntity`
+- [ ] Implement entity ID slugification:
+  - [ ] Import `from homeassistant.util import slugify`
+  - [ ] Generate entity_id: `f"switch.{slugify(zone_id)}_{slugify(layer_name)}_layer"`
+  - [ ] Ensure all user-provided names are slugified
+- [ ] Implement entity properties:
+  - [ ] `entity_id` following pattern: `switch.{zone_id}_{layer_name}_layer` (slugified)
+  - [ ] `state` property returning "on"/"off"
+  - [ ] `unique_id` for entity registry
+  - [ ] `device_info` for grouping under zone device
+  - [ ] `entity_category` as `CONFIG` for UI organization
+- [ ] Implement state attributes:
+  - [ ] `zone_id`: String identifier for zone
+  - [ ] `layer_name`: User-defined layer name
+  - [ ] `priority`: Integer 0-100
+  - [ ] `brightness`: Optional 0-255
+  - [ ] `color_temp`: Optional mireds
+  - [ ] `rgb_color`: Optional (r,g,b) tuple
+  - [ ] `transition`: Optional float seconds
+  - [ ] `force`: Boolean override flag
+  - [ ] `locked`: Boolean lock flag
+  - [ ] `conditions`: Dict of activation conditions
+  - [ ] `source`: String identifying trigger
+  - [ ] `last_updated`: DateTime timestamp
+  - [ ] `extra_attributes`: Dict for arbitrary user attributes (flexible storage)
+- [ ] Implement switch methods:
+  - [ ] `async_turn_on()`: Activate layer with parameters
+  - [ ] `async_turn_off()`: Deactivate layer
+  - [ ] `async_activate()`: Internal activation with parameters
+  - [ ] `async_deactivate()`: Internal deactivation
+  - [ ] `async_update_priority()`: Change priority
+  - [ ] `async_lock()`: Lock layer
+  - [ ] `async_unlock()`: Unlock layer
+  - [ ] `async_force()`: Set force flag
+  - [ ] `async_added_to_hass()`: Restore previous state
+  - [ ] `async_will_remove_from_hass()`: Cleanup
+- [ ] Implement switch-specific properties:
+  - [ ] `is_on`: Boolean state from underlying layer state
+  - [ ] `available`: Based on coordinator availability
+- [ ] Support standard switch services:
+  - [ ] Native `switch.turn_on` service calls
+  - [ ] Native `switch.turn_off` service calls
+  - [ ] Native `switch.toggle` service calls
+
+#### Task 1.3: Config Flow (`config_flow.py`)
+- [ ] Create `LightingManagerConfigFlow` class
+- [ ] Implement `async_step_user()` for UI entry
+- [ ] Create simple zone configuration form:
+  - [ ] Zone name input (string)
+  - [ ] Light entity selector (multi-select)
+- [ ] Generate unique zone_id from slugified name
+- [ ] Validate no duplicate zones
+- [ ] Create ConfigEntry with proper data/options split:
+  - [ ] `config_entry.data` (structural, immutable):
+    - [ ] `zone_id`: Unique zone identifier (slugified)
+    - [ ] `zone_name`: Display name for zone
+    - [ ] `area_id`: Optional area association
+  - [ ] `config_entry.options` (user-configurable):
+    - [ ] `light_entities`: List of light entity IDs
+    - [ ] `default_transition`: Default transition time
+    - [ ] `adaptive_enabled`: Boolean for built-in adaptive
+    - [ ] `adaptive_brightness_range`: [min, max]
+    - [ ] `adaptive_color_temp_range`: [min, max]
+
+#### Task 1.4: Options Flow (`config_flow.py`)
+- [ ] Implement `async_get_options_flow()`
+- [ ] Create `OptionsFlowHandler` class
+- [ ] Allow editing ONLY options (not data):
+  - [ ] Light entities list
+  - [ ] Default transition time
+  - [ ] Adaptive enable/disable
+  - [ ] Adaptive brightness range
+  - [ ] Adaptive color temp range
+- [ ] Note: zone_id and zone_name are immutable (in data)
+
+### PHASE 2: Orchestration Engine
+**Goal**: Build the reactive calculation and application engine
+
+#### Task 2.1: Zone Coordinator (`coordinator.py`)
+- [ ] Create `ZoneCoordinator` extending `DataUpdateCoordinator`
+- [ ] Initialize with zone_id and light entities
+- [ ] Implement layer discovery:
+  - [ ] Find all switch entities with "_layer" suffix for zone
+  - [ ] Store entity IDs for monitoring
+- [ ] Set up event listeners:
+  - [ ] Track switch entity state changes
+  - [ ] Debounce with 100ms delay
+  - [ ] Trigger recalculation on change
+- [ ] Implement `_async_update_data()`:
+  - [ ] Gather all layer states
+  - [ ] Call calculator for final state
+  - [ ] Store calculation results
+  - [ ] Return data dictionary
+- [ ] Handle coordinator lifecycle:
+  - [ ] Initialize on zone creation
+  - [ ] Clean up on zone removal
+  - [ ] Handle entity availability
+- [ ] Implement state restoration logic:
+  - [ ] Track light availability state
+  - [ ] Store calculated state when lights become unavailable
+  - [ ] Restore calculated state when lights return to available
+  - [ ] Queue state application for unavailable lights
+
+#### Task 2.2: Calculation Engine (`calculator.py`)
+- [ ] Create `LightingCalculator` class
+- [ ] Implement `calculate_state()` pure function:
+  - [ ] Input: List of active layers
+  - [ ] Sort by priority (highest first)
+  - [ ] Check force flags (override priority)
+  - [ ] Check locked flags (cannot change)
+  - [ ] Determine winning layer
+  - [ ] Build final light state
+  - [ ] Return calculation result
+- [ ] Implement calculation caching (REQ-P009):
+  - [ ] Cache key from layer states
+  - [ ] TTL-based cache expiry
+  - [ ] Cache invalidation on change
+- [ ] Add @callback decorators (REQ-P007):
+  - [ ] For synchronous operations
+  - [ ] Avoid unnecessary async overhead
+- [ ] Implement conflict detection:
+  - [ ] Detect priority ties
+  - [ ] Detect multiple force flags
+  - [ ] Detect all layers locked
+  - [ ] Log conflicts with resolution (REQ-O012)
+  - [ ] Return conflict list
+- [ ] Create calculation result structure:
+  ```python
+  {
+    "winning_layer": "switch.zone_layername_layer",
+    "final_state": {
+      "power": "on/off",
+      "brightness": 0-255,
+      "color_temp": mireds,
+      "rgb_color": (r,g,b),
+      "transition": seconds
+    },
+    "conflicts": ["priority_tie_at_20"],
+    "calculation_path": ["layer1", "layer2"],
+    "calculation_time_ms": 12
+  }
+  ```
+
+#### Task 2.3: Light Control (`light_control.py`)
+- [ ] Create `LightController` class
+- [ ] Implement `apply_state()` method:
+  - [ ] Receive final state from coordinator
+  - [ ] Build service call data
+  - [ ] Handle different light capabilities
+  - [ ] Apply atomically to all lights
+- [ ] Handle special cases:
+  - [ ] Lights without color temp support
+  - [ ] Lights without brightness control
+  - [ ] RGB-only lights
+  - [ ] Unavailable lights
+- [ ] Implement transition handling:
+  - [ ] Respect layer transition times
+  - [ ] Handle instant changes
+  - [ ] Queue transitions
+
+#### Task 2.4: Integration (`__init__.py`)
+- [ ] Update `async_setup_entry()`:
+  - [ ] Create zone device in registry
+  - [ ] Initialize ZoneCoordinator
+  - [ ] Forward to platform setup
+  - [ ] Register coordinator listener
+- [ ] Implement listener callback:
+  - [ ] Get data from coordinator
+  - [ ] Apply to lights via controller
+  - [ ] Fire completion events
+- [ ] Handle zone lifecycle:
+  - [ ] Creation from config flow
+  - [ ] Removal/unload
+  - [ ] Reload on options change
+
+### PHASE 3: Layer Management Services
+**Goal**: Create intuitive API for layer control
+
+#### Task 3.1: Layer Creation Service
+- [ ] Service: `create_layer`
+- [ ] Parameters:
+  - [ ] zone_id: Target zone
+  - [ ] layer_name: Unique name (will be slugified)
+  - [ ] priority: Initial priority
+  - [ ] auto_remove: Remove when inactive
+- [ ] Implementation:
+  - [ ] Slugify zone_id and layer_name using `slugify()`
+  - [ ] Validate unique name in zone
+  - [ ] Create switch entity with ID: `switch.{slugify(zone_id)}_{slugify(layer_name)}_layer`
+  - [ ] Add to entity registry with proper unique_id
+  - [ ] Associate with zone device
+
+#### Task 3.2: Layer Control Services
+- [ ] Service: `activate_layer`
+  - [ ] Target: switch entity
+  - [ ] Parameters: brightness, color_temp, rgb_color, transition, source
+  - [ ] Call switch's `async_turn_on()` or `async_activate()`
+- [ ] Service: `deactivate_layer`
+  - [ ] Target: switch entity
+  - [ ] Call switch's `async_turn_off()` or `async_deactivate()`
+- [ ] Service: `update_layer`
+  - [ ] Target: switch entity
+  - [ ] Parameters: Any layer attributes
+  - [ ] Update without changing on/off state
+
+#### Task 3.3: Layer State Services
+- [ ] Service: `set_layer_priority`
+  - [ ] Target: switch entity
+  - [ ] Parameter: priority (0-100)
+- [ ] Service: `lock_layer`
+  - [ ] Target: switch entity
+  - [ ] Prevent modifications
+- [ ] Service: `unlock_layer`
+  - [ ] Target: switch entity
+- [ ] Service: `force_layer`
+  - [ ] Target: switch entity
+  - [ ] Override priority system
+
+#### Task 3.4: Zone Services
+- [ ] Service: `recalculate_zone`
+  - [ ] Parameter: zone_id
+  - [ ] Force immediate recalculation
+- [ ] Service: `clear_zone`
+  - [ ] Parameter: zone_id
+  - [ ] Deactivate all layers
+- [ ] Service: `clear_layer`
+  - [ ] Parameters: zone_id, layer_name
+  - [ ] Remove specified layer from ALL entities at once
+  - [ ] System-wide layer cleanup
+- [ ] Service: `apply_preset`
+  - [ ] Parameters: zone_id, preset_data
+  - [ ] Configure multiple layers atomically
+- [ ] Service: `insert_scene`
+  - [ ] Parameters: zone_id, scene_entity_id, layer_name, priority
+  - [ ] Extract scene state and apply as layer
+  - [ ] Map HA scene attributes to layer attributes
+  - [ ] Support scene transitions and source tracking
+
+#### Task 3.5: Service Definitions (`services.yaml`)
+- [ ] Define all services with descriptions
+- [ ] Add parameter schemas
+- [ ] Include examples
+- [ ] Define selectors for UI
+
+### PHASE 4: Observability & Debugging
+**Goal**: Complete transparency of system state
+
+#### Task 4.1: Sensor Platform (`sensor.py`)
+- [ ] Implement `async_setup_entry()`
+- [ ] Create sensor base class extending `CoordinatorEntity`
+- [ ] Implement zone sensors:
+  - [ ] Winning Layer Sensor
+  - [ ] Active Layers Sensor
+  - [ ] Calculation Path Sensor
+  - [ ] Conflict Status Sensor
+  - [ ] Final State Sensor
+  - [ ] Performance Metrics Sensor
+  - [ ] Last Calculation Time Sensor
+  - [ ] AdaptiveLightFactorSensor (critical for sun-based adaptation)
+    - [ ] Calculate sun elevation factor
+    - [ ] Return 0.0 (night) to 1.0 (day) range
+    - [ ] Update every 5 minutes or on sun events
+    - [ ] Include sun azimuth and time-of-day data
+- [ ] Link sensors to coordinator:
+  - [ ] Subscribe to coordinator updates
+  - [ ] Update state from coordinator data
+  - [ ] Show "unknown" when no data
+  - [ ] Set `entity_category` as `DIAGNOSTIC` for UI organization
+
+#### Task 4.2: Event System
+- [ ] Define event types in `const.py`
+- [ ] Fire events from coordinator:
+  - [ ] `lighting_manager.layer_activated`
+  - [ ] `lighting_manager.layer_deactivated`
+  - [ ] `lighting_manager.calculation_complete`
+  - [ ] `lighting_manager.conflict_detected`
+  - [ ] `lighting_manager.state_applied`
+- [ ] Include relevant data in payloads:
+  - [ ] Zone and layer identifiers
+  - [ ] State changes
+  - [ ] Timing information
+  - [ ] Conflict details
+
+#### Task 4.3: Device Registry Integration
+- [ ] Create zone device on setup:
+  - [ ] Manufacturer: "Lighting Manager"
+  - [ ] Model: "Adaptive Zone"
+  - [ ] SW Version: "4.0.0"
+- [ ] Associate all entities:
+  - [ ] Switch entities (layers)
+  - [ ] Sensor entities
+  - [ ] Group under zone device
+- [ ] Update device on changes:
+  - [ ] Configuration updates
+  - [ ] Entity additions/removals
+
+#### Task 4.4: Diagnostics (`diagnostics.py`)
+- [ ] Implement `async_get_config_entry_diagnostics()`
+- [ ] Include diagnostic data:
+  - [ ] Zone configuration
+  - [ ] Switch entity states (layers)
+  - [ ] Calculation history
+  - [ ] Performance metrics
+  - [ ] Error logs
+- [ ] Redact sensitive information
+
+### PHASE 5: Area and Scene Integration
+**Goal**: Integrate with Home Assistant areas and scenes
+
+#### Task 5.1: Area Integration (`area_manager.py`)
+- [ ] Create `AreaManager` class
+- [ ] Implement area-zone linking:
+  - [ ] Store area_id in zone config
+  - [ ] Subscribe to area registry changes
+  - [ ] Auto-update light list when area changes
+- [ ] Implement light discovery:
+  - [ ] Find all lights in area
+  - [ ] Filter by domain and capabilities
+  - [ ] Present to user for confirmation
+- [ ] Area-wide operations:
+  - [ ] Apply preset to all zones in area
+  - [ ] Sync settings across area zones
+  - [ ] Area-based automation triggers
+
+#### Task 5.2: Scene Integration (`scene_handler.py`)
+- [ ] Create `SceneHandler` class
+- [ ] Implement scene → layer activation:
+  - [ ] Register scene.turn_on listener
+  - [ ] Check if scene contains managed lights
+  - [ ] Create/activate corresponding switch entity (layer)
+  - [ ] Map scene attributes to layer attributes
+- [ ] Implement layer → scene creation:
+  - [ ] Service to save current layers as scene
+  - [ ] Include all active switch entity states (layers)
+  - [ ] Store layer metadata in scene
+- [ ] Scene transition support:
+  - [ ] Extract transition from scene data
+  - [ ] Apply to layer activation
+  - [ ] Respect scene priorities
+
+### PHASE 6: Built-in Adaptive Lighting System
+**Goal**: Implement circadian and sensor-based adaptation as core system feature
+
+#### Task 6.1: Built-in Adaptive Engine (`adaptive.py`)
+- [ ] Create `AdaptiveEngine` as core system component (not external)
+- [ ] Implement sun-based calculations:
+  - [ ] Track sun elevation using HA sun integration
+  - [ ] Calculate color temperature curve (2000K-6500K default)
+  - [ ] Calculate brightness curve (10%-100% default)
+  - [ ] Use AdaptiveLightFactorSensor as primary data source
+- [ ] Implement time-based profiles (REQ-I003):
+  - [ ] Define profile structure
+  - [ ] Time-of-day curves
+  - [ ] Weekday/weekend variations
+  - [ ] Override sun-based when active
+- [ ] Built-in sensor integration:
+  - [ ] Subscribe to sensor changes
+  - [ ] Scale values to ranges
+  - [ ] Apply to calculations
+  - [ ] Default to sun-based when no sensors configured
+- [ ] Handle adaptive properties:
+  - [ ] Per-zone settings stored in zone config
+  - [ ] Per-layer overrides via layer attributes
+  - [ ] Global defaults in integration config
+- [ ] Automatic adaptive layer creation:
+  - [ ] Create "adaptive" layer on zone setup if enabled
+  - [ ] Priority 10 (low but not zero)
+  - [ ] Auto-update based on sun/time/sensor changes
+
+#### Task 6.2: Built-in Adaptive Layer Support
+- [ ] Add adaptive attributes to LayerSwitch (via extra_attributes):
+  - [ ] `adaptive_brightness`: Boolean
+  - [ ] `adaptive_color_temp`: Boolean
+  - [ ] `brightness_range`: (min, max)
+  - [ ] `color_temp_range`: (min, max)
+  - [ ] `adaptive_mode`: "sun", "time", "sensor", or "disabled"
+- [ ] Implement built-in adaptive value calculation:
+  - [ ] Check if layer has adaptive enabled
+  - [ ] Get current adaptive values from AdaptiveLightFactorSensor
+  - [ ] Apply scaling to brightness/color_temp ranges
+  - [ ] Update layer state automatically
+  - [ ] Trigger zone recalculation
+- [ ] Automatic adaptive layer management:
+  - [ ] Create on zone setup if adaptive enabled
+  - [ ] Update every 5 minutes or on sensor changes
+  - [ ] Remove when adaptive disabled for zone
+
+#### Task 6.3: Built-in Adaptive Configuration
+- [ ] Add to config flow (zone setup):
+  - [ ] Enable/disable built-in adaptive
+  - [ ] Default brightness ranges (10-100%)
+  - [ ] Default color temp ranges (2000-6500K)
+  - [ ] Optional input sensor selection
+  - [ ] Adaptive mode selection (sun/time/sensor)
+- [ ] Store in config entry:
+  - [ ] Per-zone adaptive settings
+  - [ ] Default values for new layers
+  - [ ] Sensor entity IDs
+- [ ] Allow runtime updates:
+  - [ ] Via options flow (zone reconfiguration)
+  - [ ] Via services (adaptive_layer_update)
+  - [ ] Automatic sensor change detection
+
+### PHASE 6: Migration & Compatibility
+**Goal**: Smooth transition from existing system
+
+#### Task 6.1: YAML Config Import
+- [ ] Detect existing `configuration.yaml` entries
+- [ ] Parse entity configurations
+- [ ] Create config entries automatically
+- [ ] Preserve all settings:
+  - [ ] Adaptive ranges
+  - [ ] Entity mappings
+  - [ ] Input sensors
+
+#### Task 6.2: State Migration
+- [ ] Read existing `DATA_STATES` if present
+- [ ] Convert to switch entities:
+  - [ ] Create switch entity for each existing layer_id
+  - [ ] Set priority from stored value
+  - [ ] Apply stored state attributes
+  - [ ] Convert "active"/"inactive" to "on"/"off"
+- [ ] Maintain layer activation status
+
+#### Task 6.3: Service Translation
+- [ ] Create compatibility shim for old services:
+  - [ ] Map `insert_state` to layer activation
+  - [ ] Map `remove_layer` to layer deactivation
+  - [ ] Map `insert_scene` to preset application
+- [ ] Log deprecation warnings
+- [ ] Guide users to new services
+
+### PHASE 7: Testing & Validation
+**Goal**: Ensure reliability and performance
+
+#### Task 7.1: Unit Tests
+- [ ] Test calculator logic:
+  - [ ] Priority resolution
+  - [ ] Force flag handling
+  - [ ] Lock state handling
+  - [ ] Conflict detection
+- [ ] Test switch entity (layers):
+  - [ ] On/off state changes
+  - [ ] Attribute updates
+  - [ ] Persistence
+- [ ] Test coordinator:
+  - [ ] Event handling
+  - [ ] Debouncing
+  - [ ] Data updates
+
+#### Task 7.2: Integration Tests
+- [ ] Test full flow:
+  - [ ] Layer change → calculation → application
+  - [ ] Service calls → state changes
+  - [ ] Event firing → automation triggers
+- [ ] Test edge cases:
+  - [ ] Unavailable lights
+  - [ ] Rapid state changes
+  - [ ] Conflicting updates
+
+#### Task 7.3: Performance Tests
+- [ ] Measure calculation speed:
+  - [ ] 10 layers: < 50ms
+  - [ ] 20 layers: < 100ms
+- [ ] Test scalability:
+  - [ ] 20 zones
+  - [ ] 20 layers per zone
+  - [ ] 50 lights per zone
+- [ ] Monitor memory usage:
+  - [ ] Entity overhead
+  - [ ] Calculation caching
+  - [ ] Event handling
+
+#### Task 7.4: User Acceptance Testing
+- [ ] Deploy to test instance
+- [ ] Create sample zones and layers
+- [ ] Test common scenarios:
+  - [ ] Manual override
+  - [ ] Scene activation
+  - [ ] Adaptive transitions
+  - [ ] Conflict resolution
+- [ ] Verify UI functionality:
+  - [ ] Config flow
+  - [ ] Entity cards
+  - [ ] Service calls
+  - [ ] Sensor visibility
+
+### PHASE 8: Documentation & Polish
+**Goal**: Production-ready component
+
+#### Task 8.1: User Documentation
+- [ ] Write README.md:
+  - [ ] Installation instructions
+  - [ ] Configuration guide
+  - [ ] Service documentation
+  - [ ] Example automations
+- [ ] Create wiki pages:
+  - [ ] Architecture overview
+  - [ ] Layer concepts
+  - [ ] Troubleshooting guide
+
+#### Task 8.2: Code Documentation
+- [ ] Add docstrings to all classes
+- [ ] Document all public methods
+- [ ] Include type hints
+- [ ] Add inline comments for complex logic
+
+#### Task 8.3: Error Handling
+- [ ] Add try/catch blocks
+- [ ] Implement graceful degradation
+- [ ] Log appropriate messages
+- [ ] User-friendly error reporting
+
+#### Task 8.4: Final Polish
+- [ ] Code formatting (black/isort)
+- [ ] Linting (pylint/flake8)
+- [ ] Remove debug code
+- [ ] Optimize performance
+- [ ] Version tagging
+
+## Implementation Order
+
+Given your test instance availability, I recommend this order:
+
+1. **Start with Phase 1 & 2 together** - Get basic layer entities and calculation working
+2. **Add Phase 3** - Services to control layers
+3. **Add Phase 4** - Observability for debugging
+4. **Add Phase 5** - Adaptive lighting
+5. **Skip Phase 6** - No migration needed for fresh install
+6. **Continuous Phase 7** - Test as we build
+7. **Final Phase 8** - Documentation
+
+## Key Design Decisions
+
+1. **No Prescriptive Layers**: Users create whatever layers they need
+2. **Pure Calculation**: Calculator has no side effects, completely testable
+3. **Event-Driven**: Changes trigger recalculation automatically
+4. **Total Visibility**: Every decision is observable via switch entities and sensors
+5. **Atomic Operations**: All lights in a zone update together
+
+## Success Metrics
+
+- Layer state changes apply within 200ms
+- No hidden state anywhere in the system
+- Every lighting decision traceable to specific layers
+- Zero race conditions
+- Clean separation of concerns
