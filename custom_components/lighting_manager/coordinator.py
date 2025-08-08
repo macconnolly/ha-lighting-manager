@@ -10,7 +10,7 @@ import logging
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.util import dt as dt_util
@@ -33,9 +33,12 @@ from .const import (
     DEFAULT_PRIORITY,
     DEFAULT_TRANSITION,
     DOMAIN,
+    EVENT_CALCULATION_COMPLETE,
     STORAGE_KEY_PREFIX,
     STORAGE_VERSION,
 )
+from .calculator import LightingCalculator
+from .light_control import LightController
 from .validation import (
     get_timezone_aware_now,
     validate_brightness,
@@ -88,6 +91,13 @@ class ZoneCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._debounce_timer: asyncio.TimerHandle | None = None
         self._save_timer: asyncio.TimerHandle | None = None
         
+        # Calculator and light controller (Phase 2)
+        self._calculator = LightingCalculator()
+        self._light_controller = LightController(hass, zone_id, self.light_entities)
+        
+        # Cached calculation result
+        self._last_calculation: dict[str, Any] | None = None
+        
         _LOGGER.info("Coordinator initialized for zone %s", self.zone_id)
 
     @property
@@ -97,6 +107,14 @@ class ZoneCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         This is the GOLDEN PATH implementation - data is a property that
         returns the layers dictionary directly, not through _async_update_data.
         """
+        # Include last calculation result if available
+        calc_data = self._last_calculation or {
+            "winning_layer": None,
+            "final_state": {"power": "off"},
+            "conflicts": [],
+            "calculation_path": [],
+        }
+        
         return {
             "layers": self.layers,  # Direct reference, not copy!
             "active_layers": [
@@ -106,6 +124,11 @@ class ZoneCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             ],
             "zone_id": self.zone_id,
             "last_updated": get_timezone_aware_now(),
+            # Phase 2: Include calculation results
+            "winning_layer": calc_data.get("winning_layer"),
+            "final_state": calc_data.get("final_state", {}),
+            "conflicts": calc_data.get("conflicts", []),
+            "calculation_path": calc_data.get("calculation_path", []),
         }
 
     async def async_load(self) -> None:
@@ -202,9 +225,9 @@ class ZoneCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if key not in self.layers[layer_id]:
                 self.layers[layer_id][key] = value
         
-        # Save and notify
+        # Save and trigger recalculation
         self.schedule_save()
-        self.async_update_listeners()  # Notify switches to update
+        self.schedule_recalculation()  # Phase 2: Triggers calculation + light update
         
         _LOGGER.info("Created layer %s in zone %s with priority %d",
                     layer_id, self.zone_id, priority)
@@ -242,9 +265,9 @@ class ZoneCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # Apply updates
         self.layers[layer_id].update(updates)
         
-        # Save and notify
+        # Save and trigger recalculation
         self.schedule_save()
-        self.async_update_listeners()  # Triggers switch updates
+        self.schedule_recalculation()  # Phase 2: Triggers calculation + light update
         
         _LOGGER.debug("Updated layer %s in zone %s", layer_id, self.zone_id)
         return True
@@ -257,9 +280,9 @@ class ZoneCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         
         del self.layers[layer_id]
         
-        # Save and notify
+        # Save and trigger recalculation
         self.schedule_save()
-        self.async_update_listeners()
+        self.schedule_recalculation()  # Phase 2: Triggers calculation + light update
         
         _LOGGER.info("Deleted layer %s from zone %s", layer_id, self.zone_id)
         return True
@@ -268,6 +291,80 @@ class ZoneCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Get layer data by ID - read-only, can be sync."""
         return self.layers.get(layer_id)
 
+    async def _async_update_data(self) -> dict[str, Any]:
+        """Calculate new state and apply to lights.
+        
+        This is called after debouncing to:
+        1. Calculate which layer wins
+        2. Apply the result to lights
+        3. Return the updated data
+        """
+        # Get active layers
+        active_layers = [
+            {**layer, "layer_id": lid}
+            for lid, layer in self.layers.items()
+            if layer.get(ATTR_IS_ON, False)
+        ]
+        
+        # Calculate winning state
+        if active_layers:
+            calc_result = self._calculator.calculate_state(active_layers)
+        else:
+            calc_result = {
+                "winning_layer": None,
+                "final_state": {"power": "off"},
+                "conflicts": [],
+                "calculation_path": [],
+                "total_active_layers": 0,
+            }
+        
+        # Store calculation result
+        self._last_calculation = calc_result
+        
+        # Apply to lights
+        await self._light_controller.apply_state(calc_result["final_state"])
+        
+        # Fire event
+        self.hass.bus.async_fire(
+            EVENT_CALCULATION_COMPLETE,
+            {
+                "zone_id": self.zone_id,
+                "winning_layer": calc_result.get("winning_layer"),
+                "final_state": calc_result.get("final_state"),
+                "conflicts": calc_result.get("conflicts"),
+                "calculation_time_ms": calc_result.get("calculation_time_ms", 0),
+            }
+        )
+        
+        _LOGGER.debug(
+            "Calculation complete for zone %s: winner=%s, time=%.2fms",
+            self.zone_id,
+            calc_result.get("winning_layer"),
+            calc_result.get("calculation_time_ms", 0)
+        )
+        
+        # Return the data (though we use the property now)
+        return self.data
+    
+    def schedule_recalculation(self) -> None:
+        """Schedule a recalculation with debouncing.
+        
+        This replaces the simple async_update_listeners() call
+        to add debouncing and calculation.
+        """
+        if self._debounce_timer:
+            self._debounce_timer.cancel()
+        
+        self._debounce_timer = self.hass.loop.call_later(
+            DEBOUNCE_SECONDS,  # 100ms debounce
+            lambda: self.hass.async_create_task(self.async_refresh())
+        )
+    
+    async def async_refresh(self) -> None:
+        """Refresh data with calculation."""
+        await self._async_update_data()
+        self.async_update_listeners()
+    
     async def async_shutdown(self) -> None:
         """Clean up when coordinator is being removed."""
         # Cancel timers

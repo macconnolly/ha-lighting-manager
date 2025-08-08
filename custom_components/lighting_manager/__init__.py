@@ -96,6 +96,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if len(hass.data[DOMAIN]) == 1:  # First zone being set up
         await async_setup_services(hass)
     
+    # Phase 2: Trigger initial calculation if there are active layers
+    if any(layer.get("is_on", False) for layer in coordinator.layers.values()):
+        await coordinator.async_refresh()
+        _LOGGER.info("Initial calculation performed for zone %s", entry.data["zone_name"])
+    
     _LOGGER.info("Successfully set up zone: %s with %d existing layers",
                  entry.data["zone_name"], len(coordinator.layers))
     
@@ -126,8 +131,23 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 async def async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Reload config entry when options change."""
     _LOGGER.info("Reloading zone %s due to options change", entry.data["zone_name"])
-    await async_unload_entry(hass, entry)
-    await async_setup_entry(hass, entry)
+    
+    # Phase 2: Update light controller when options change
+    coordinator: ZoneCoordinator = hass.data[DOMAIN][entry.entry_id][DATA_COORDINATOR]
+    new_lights = entry.options.get("light_entities", [])
+    
+    if coordinator._light_controller:
+        coordinator._light_controller.update_light_entities(new_lights)
+        coordinator.light_entities = new_lights
+        _LOGGER.info("Updated light entities for zone %s without full reload", 
+                    entry.data["zone_name"])
+        
+        # Trigger recalculation with new lights
+        coordinator.schedule_recalculation()
+    else:
+        # Fall back to full reload if needed
+        await async_unload_entry(hass, entry)
+        await async_setup_entry(hass, entry)
 
 
 async def async_setup_services(hass: HomeAssistant) -> None:
