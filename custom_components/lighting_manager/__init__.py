@@ -95,6 +95,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Register services ONCE at domain level
     if len(hass.data[DOMAIN]) == 1:  # First zone being set up
         await async_setup_services(hass)
+        
+        # Register Phase 3 services
+        from .services import async_setup_services as setup_phase3_services
+        await setup_phase3_services(hass)
     
     # Phase 2: Trigger initial calculation if there are active layers
     if any(layer.get("is_on", False) for layer in coordinator.layers.values()):
