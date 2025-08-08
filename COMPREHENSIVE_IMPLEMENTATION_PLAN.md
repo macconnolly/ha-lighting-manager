@@ -80,9 +80,27 @@ Transform layers from hidden dictionary entries to **first-class Home Assistant 
   - [ ] Light entities list
   - [ ] Default transition time
   - [ ] Adaptive enable/disable
-  - [ ] Adaptive brightness range
-  - [ ] Adaptive color temp range
+  - [ ] Adaptive brightness range (CRITICAL: properly reconstruct from min/max inputs)
+  - [ ] Adaptive color temp range (CRITICAL: properly reconstruct from min/max inputs)
 - [ ] Note: zone_id and zone_name are immutable (in data)
+- [ ] FIX: When saving options, reconstruct ranges as arrays:
+  ```python
+  # In async_step_init when user_input is not None:
+  options_data = {
+      "light_entities": user_input["light_entities"],
+      "default_transition": user_input["default_transition"],
+      "adaptive_enabled": user_input["adaptive_enabled"],
+      "adaptive_brightness_range": [
+          user_input["adaptive_brightness_min"],
+          user_input["adaptive_brightness_max"]
+      ],
+      "adaptive_color_temp_range": [
+          user_input["adaptive_color_temp_min"],
+          user_input["adaptive_color_temp_max"]
+      ]
+  }
+  return self.async_create_entry(title="", data=options_data)
+  ```
 
 ### PHASE 2: Orchestration Engine
 **Goal**: Build the reactive calculation and application engine
@@ -579,3 +597,42 @@ Given your test instance availability, I recommend this order:
 - Every lighting decision traceable to specific layers
 - Zero race conditions
 - Clean separation of concerns
+
+## Lessons Learned from Initial Implementation
+
+### Critical Architecture Violations to Avoid
+
+1. **❌ NEVER extend RestoreEntity for switches**
+   - Switches must extend only `CoordinatorEntity, SwitchEntity`
+   - All state restoration happens through the coordinator's Store
+
+2. **❌ NEVER store state in switch entities**
+   - No `_attr_is_on`, `_priority`, `_brightness` etc. in switches
+   - ALL state lives in `coordinator.layers` dictionary
+
+3. **❌ NEVER modify state directly in switches**
+   - `async_turn_on()` must call `coordinator.update_layer()`
+   - Switches are read-only views, write-only commands
+
+4. **✅ ALWAYS read from coordinator.data in switches**
+   ```python
+   @property
+   def is_on(self) -> bool:
+       layer_data = self.coordinator.data.get("layers", {}).get(self.layer_id, {})
+       return layer_data.get("is_on", False)
+   ```
+
+5. **✅ ALWAYS implement Store in coordinator from the start**
+   - Load layers in `async_load()` during setup
+   - Save on every change with debouncing
+   - This is the ONLY place state is persisted
+
+6. **✅ ALWAYS properly reconstruct options in options flow**
+   - Brightness and color temp ranges must be reconstructed as arrays
+   - Don't pass individual min/max values directly
+
+### Implementation Order Corrections
+
+- Start coordinator implementation BEFORE switches
+- Implement Store persistence immediately, not later
+- Test coordinator state management before adding UI elements
