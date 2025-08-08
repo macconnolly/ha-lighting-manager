@@ -11,10 +11,13 @@
 
 ### The Sacred Separation
 ```
-Switches (Data) → Coordinator (Orchestration) → Calculator (Logic) → Controller (Application)
-     ↓                    ↓                          ↓                      ↓
-   Pure State      Event Management            Pure Functions         Service Calls
+Switches (Views) → Coordinator (State+Orchestration) → Calculator (Logic) → Controller (Application)
+     ↓                    ↓                              ↓                      ↓
+   UI Display      Single Source of Truth          Pure Functions         Service Calls
+   User Input      All Layer State Here            No Side Effects       Light Commands
 ```
+
+**Critical**: Switches are STATELESS VIEWS. The Coordinator holds ALL state.
 
 ## 🏗️ Architecture Decision Records (ADRs)
 
@@ -32,6 +35,15 @@ Switches (Data) → Coordinator (Orchestration) → Calculator (Logic) → Contr
 **Decision**: Coordinator debounces all changes for 100ms before calculation
 **Rationale**: Prevents calculation storms during rapid changes while remaining responsive
 **Measurement**: Log timestamp delta between trigger and application
+
+### ADR-004: Coordinator-Centric State Management
+**Decision**: ZoneCoordinator holds ALL layer state; switches are stateless views
+**Rationale**: 
+- Single source of truth eliminates sync issues
+- Follows Home Assistant's DataUpdateCoordinator pattern
+- Enables atomic updates and prevents race conditions
+- Simplifies debugging (all state in one place)
+**Implementation**: Switches read from `coordinator.data["layers"][layer_id]` and call `coordinator.update_layer()`
 
 ## 🚦 Implementation Patterns
 

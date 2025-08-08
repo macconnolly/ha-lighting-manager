@@ -3,6 +3,8 @@
 ## Core Architectural Principle
 Transform layers from hidden dictionary entries to **first-class Home Assistant switch entities** that users can see, control, and automate against. Each layer becomes a visible, manageable switch entity with "on/off" states and rich attributes.
 
+**Critical Design Pattern**: The ZoneCoordinator is the single source of truth for all layer state. Switch entities are stateless views that display coordinator data and send commands to the coordinator. This follows the standard Home Assistant DataUpdateCoordinator pattern.
+
 ## Complete Task Breakdown
 
 ### PHASE 1: Foundation - Entity Platform & Data Models
@@ -20,51 +22,36 @@ Transform layers from hidden dictionary entries to **first-class Home Assistant 
 #### Task 1.2: Switch Platform for Layers (`switch.py`)
 - [ ] Create switch platform implementation 
 - [ ] Implement `async_setup_entry()` function
-  - [ ] Register the zone but create NO automatic layers
-  - [ ] Layers are created only via explicit user action
-- [ ] Define `LayerSwitch` class extending `SwitchEntity, RestoreEntity, CoordinatorEntity`
+  - [ ] Get coordinator reference from hass.data
+  - [ ] Create switch entities for existing layers in coordinator
+  - [ ] Store add_entities callback for dynamic layer creation
+- [ ] Define `LayerSwitch` class extending `CoordinatorEntity, SwitchEntity` (NOT RestoreEntity)
 - [ ] Implement entity ID slugification:
   - [ ] Import `from homeassistant.util import slugify`
   - [ ] Generate entity_id: `f"switch.{slugify(zone_id)}_{slugify(layer_name)}_layer"`
   - [ ] Ensure all user-provided names are slugified
-- [ ] Implement entity properties:
+- [ ] Implement entity properties (ALL read from coordinator.data):
   - [ ] `entity_id` following pattern: `switch.{zone_id}_{layer_name}_layer` (slugified)
-  - [ ] `state` property returning "on"/"off"
   - [ ] `unique_id` for entity registry
   - [ ] `device_info` for grouping under zone device
   - [ ] `entity_category` as `CONFIG` for UI organization
-- [ ] Implement state attributes:
-  - [ ] `zone_id`: String identifier for zone
-  - [ ] `layer_name`: User-defined layer name
-  - [ ] `priority`: Integer 0-100
-  - [ ] `brightness`: Optional 0-255
-  - [ ] `color_temp`: Optional mireds
-  - [ ] `rgb_color`: Optional (r,g,b) tuple
-  - [ ] `transition`: Optional float seconds
-  - [ ] `force`: Boolean override flag
-  - [ ] `locked`: Boolean lock flag
-  - [ ] `conditions`: Dict of activation conditions
-  - [ ] `source`: String identifying trigger
-  - [ ] `last_updated`: DateTime timestamp
-  - [ ] `extra_attributes`: Dict for arbitrary user attributes (flexible storage)
-- [ ] Implement switch methods:
-  - [ ] `async_turn_on()`: Activate layer with parameters
-  - [ ] `async_turn_off()`: Deactivate layer
-  - [ ] `async_activate()`: Internal activation with parameters
-  - [ ] `async_deactivate()`: Internal deactivation
-  - [ ] `async_update_priority()`: Change priority
-  - [ ] `async_lock()`: Lock layer
-  - [ ] `async_unlock()`: Unlock layer
-  - [ ] `async_force()`: Set force flag
-  - [ ] `async_added_to_hass()`: Restore previous state
-  - [ ] `async_will_remove_from_hass()`: Cleanup
-- [ ] Implement switch-specific properties:
-  - [ ] `is_on`: Boolean state from underlying layer state
-  - [ ] `available`: Based on coordinator availability
-- [ ] Support standard switch services:
-  - [ ] Native `switch.turn_on` service calls
-  - [ ] Native `switch.turn_off` service calls
-  - [ ] Native `switch.toggle` service calls
+- [ ] Implement stateless property getters from coordinator:
+  - [ ] `is_on` property: Read from `coordinator.data["layers"][layer_id]["is_on"]`
+  - [ ] `available` property: Based on coordinator availability
+  - [ ] `extra_state_attributes`: Read ALL attributes from coordinator data
+    - [ ] zone_id, layer_name, priority, brightness, color_temp, etc.
+    - [ ] All values come from coordinator, switch stores NOTHING
+- [ ] Implement switch methods that call coordinator:
+  - [ ] `async_turn_on()`: Call `coordinator.update_layer(layer_id, is_on=True, **kwargs)`
+  - [ ] `async_turn_off()`: Call `coordinator.update_layer(layer_id, is_on=False)`
+  - [ ] No local state changes, only coordinator calls
+- [ ] Implement coordinator update handling:
+  - [ ] Override `_handle_coordinator_update()` from CoordinatorEntity
+  - [ ] Simply call `self.async_write_ha_state()` to update UI
+- [ ] NO state storage in switch entity:
+  - [ ] No `_attr_is_on` or similar attributes
+  - [ ] No `_priority`, `_brightness`, etc.
+  - [ ] Switch is purely a view of coordinator data
 
 #### Task 1.3: Config Flow (`config_flow.py`)
 - [ ] Create `LightingManagerConfigFlow` class
@@ -103,27 +90,46 @@ Transform layers from hidden dictionary entries to **first-class Home Assistant 
 #### Task 2.1: Zone Coordinator (`coordinator.py`)
 - [ ] Create `ZoneCoordinator` extending `DataUpdateCoordinator`
 - [ ] Initialize with zone_id and light entities
-- [ ] Implement layer discovery:
-  - [ ] Find all switch entities with "_layer" suffix for zone
-  - [ ] Store entity IDs for monitoring
-- [ ] Set up event listeners:
-  - [ ] Track switch entity state changes
-  - [ ] Debounce with 100ms delay
-  - [ ] Trigger recalculation on change
+- [ ] Implement centralized layer state management:
+  - [ ] Store all layer states in `self.layers = {}` dictionary
+  - [ ] Each layer is a dict with: is_on, priority, brightness, color_temp, etc.
+  - [ ] Coordinator is single source of truth for ALL layer data
+- [ ] Implement Store for persistence:
+  - [ ] Create `Store` instance in `__init__`
+  - [ ] Load layers from `.storage/lighting_manager_{zone_id}.json` on startup
+  - [ ] Save layers on every state change (debounced)
+  - [ ] Handle migration from old format if needed
+- [ ] Implement layer management methods:
+  - [ ] `create_layer(layer_name, priority, **attributes)`: Add new layer to dict
+  - [ ] `update_layer(layer_id, **updates)`: Update layer attributes
+  - [ ] `delete_layer(layer_id)`: Remove layer from dict
+  - [ ] `get_layer(layer_id)`: Return layer data
+  - [ ] All methods trigger refresh after changes
+- [ ] Set up debounced refresh:
+  - [ ] Implement proper 100ms debouncing with timer
+  - [ ] Collect all pending updates during debounce window
+  - [ ] Single recalculation after debounce expires
 - [ ] Implement `_async_update_data()`:
-  - [ ] Gather all layer states
+  - [ ] Get all active layers from self.layers
   - [ ] Call calculator for final state
-  - [ ] Store calculation results
-  - [ ] Return data dictionary
+  - [ ] Return complete data structure:
+    ```python
+    {
+        "layers": self.layers,  # All layer states
+        "winning_layer": "layer_id",
+        "final_state": {...},
+        "conflicts": [],
+        "calculation_time_ms": 12
+    }
+    ```
 - [ ] Handle coordinator lifecycle:
-  - [ ] Initialize on zone creation
-  - [ ] Clean up on zone removal
-  - [ ] Handle entity availability
-- [ ] Implement state restoration logic:
+  - [ ] Load from Store on initialization
+  - [ ] Save to Store on shutdown
+  - [ ] Clean up timers on removal
+- [ ] Implement state restoration for lights:
   - [ ] Track light availability state
-  - [ ] Store calculated state when lights become unavailable
-  - [ ] Restore calculated state when lights return to available
-  - [ ] Queue state application for unavailable lights
+  - [ ] Queue commands for unavailable lights
+  - [ ] Apply queued commands when lights return
 
 #### Task 2.2: Calculation Engine (`calculator.py`)
 - [ ] Create `LightingCalculator` class
@@ -208,11 +214,13 @@ Transform layers from hidden dictionary entries to **first-class Home Assistant 
   - [ ] priority: Initial priority
   - [ ] auto_remove: Remove when inactive
 - [ ] Implementation:
-  - [ ] Slugify zone_id and layer_name using `slugify()`
-  - [ ] Validate unique name in zone
-  - [ ] Create switch entity with ID: `switch.{slugify(zone_id)}_{slugify(layer_name)}_layer`
-  - [ ] Add to entity registry with proper unique_id
-  - [ ] Associate with zone device
+  - [ ] Get coordinator for the zone from hass.data
+  - [ ] Call `coordinator.create_layer(layer_name, priority, **kwargs)`
+  - [ ] Coordinator adds layer to its internal dictionary
+  - [ ] Coordinator saves to Store
+  - [ ] Get add_entities callback from hass.data
+  - [ ] Create new LayerSwitch entity pointing to this layer
+  - [ ] Switch entity is just a view of coordinator data
 
 #### Task 3.2: Layer Control Services
 - [ ] Service: `activate_layer`
@@ -557,10 +565,12 @@ Given your test instance availability, I recommend this order:
 ## Key Design Decisions
 
 1. **No Prescriptive Layers**: Users create whatever layers they need
-2. **Pure Calculation**: Calculator has no side effects, completely testable
-3. **Event-Driven**: Changes trigger recalculation automatically
-4. **Total Visibility**: Every decision is observable via switch entities and sensors
-5. **Atomic Operations**: All lights in a zone update together
+2. **Coordinator as Single Source of Truth**: All layer state lives in the coordinator, switches are just views
+3. **Pure Calculation**: Calculator has no side effects, completely testable
+4. **Event-Driven**: Changes trigger recalculation automatically
+5. **Total Visibility**: Every decision is observable via switch entities and sensors
+6. **Atomic Operations**: All lights in a zone update together
+7. **Store-Based Persistence**: Coordinator state saved to `.storage` for recovery
 
 ## Success Metrics
 
