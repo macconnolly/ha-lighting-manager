@@ -11,6 +11,7 @@ Based on critical review findings to prevent:
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
@@ -24,7 +25,14 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN, DATA_COORDINATOR, CONF_ADAPTIVE_ENABLED
+from .const import (
+    DOMAIN,
+    DATA_COORDINATOR, 
+    CONF_ADAPTIVE_ENABLED,
+    ATTR_LAYER_TYPE,
+    LAYER_TYPE_MODIFIER,
+    LAYER_TYPE_MULTIPLIER,
+)
 from .coordinator import ZoneCoordinator
 
 _LOGGER = logging.getLogger(__name__)
@@ -318,6 +326,127 @@ class ZoneStatusSensor(LightingManagerSensorBase):
         return attrs
 
 
+class GlobalZonesSensor(SensorEntity):
+    """Global sensor listing all lighting zones.
+    
+    This sensor enables automations to iterate over all zones
+    without hardcoding zone names. Critical for the "one automation
+    for all zones" use case.
+    """
+    
+    def __init__(self, hass: HomeAssistant) -> None:
+        """Initialize the global zones sensor."""
+        self.hass = hass
+        self._attr_unique_id = "lighting_manager_zones"
+        self._attr_has_entity_name = False  # Use explicit name
+        self._attr_name = "Lighting Manager Zones"
+        self._attr_icon = "mdi:home-group"
+        
+        # Track all registered zones
+        self._zones: dict[str, dict[str, Any]] = {}
+        self._coordinators: dict[str, Any] = {}
+        
+        # Set device info to group under the integration
+        self._attr_device_info = {
+            "identifiers": {(DOMAIN, "global")},
+            "name": "Lighting Manager",
+            "manufacturer": "Lighting Manager",
+            "model": "Zone Controller",
+            "sw_version": "2.0.0",
+        }
+        
+        _LOGGER.info("GlobalZonesSensor initialized")
+    
+    def register_zone(self, entry_id: str, zone_id: str, zone_name: str, 
+                     coordinator: Any) -> None:
+        """Register a zone with the global sensor."""
+        self._zones[entry_id] = {
+            "zone_id": zone_id,
+            "zone_name": zone_name,
+            "adaptive_enabled": coordinator.config_entry.options.get(
+                CONF_ADAPTIVE_ENABLED, False
+            ),
+        }
+        self._coordinators[entry_id] = coordinator
+        
+        _LOGGER.debug("Registered zone %s with global sensor", zone_id)
+        
+        # Schedule update
+        if self.hass and hasattr(self, "async_write_ha_state"):
+            self.async_schedule_update_ha_state()
+    
+    def unregister_zone(self, entry_id: str) -> None:
+        """Unregister a zone from the global sensor."""
+        if entry_id in self._zones:
+            zone_id = self._zones[entry_id]["zone_id"]
+            del self._zones[entry_id]
+            if entry_id in self._coordinators:
+                del self._coordinators[entry_id]
+            
+            _LOGGER.debug("Unregistered zone %s from global sensor", zone_id)
+            
+            # Schedule update
+            if self.hass and hasattr(self, "async_write_ha_state"):
+                self.async_schedule_update_ha_state()
+    
+    @property
+    def native_value(self) -> int:
+        """Return the number of zones."""
+        return len(self._zones)
+    
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return zone information for automations.
+        
+        Provides stable attributes for zone iteration:
+        - zone_ids: List of all zone IDs
+        - zone_names: Mapping of zone_id to display name
+        - zones_with_adaptive: Zones with adaptive enabled
+        - zone_count: Total number of zones
+        
+        Note: zones_with_active_modifiers moved to separate sensor
+        to prevent excessive updates.
+        """
+        zone_ids = [z["zone_id"] for z in self._zones.values()]
+        zone_names = {z["zone_id"]: z["zone_name"] for z in self._zones.values()}
+        zones_with_adaptive = [
+            z["zone_id"] for z in self._zones.values() 
+            if z.get("adaptive_enabled", False)
+        ]
+        
+        # Count zones with active modifiers (but don't list them to reduce updates)
+        zones_with_modifiers_count = 0
+        for entry_id, coordinator in self._coordinators.items():
+            if hasattr(coordinator, "layers"):
+                for layer_id, layer_data in coordinator.layers.items():
+                    if (layer_data.get(ATTR_LAYER_TYPE) in [LAYER_TYPE_MODIFIER, LAYER_TYPE_MULTIPLIER] 
+                        and layer_data.get("is_on", False)):
+                        zones_with_modifiers_count += 1
+                        break  # Only count zone once
+        
+        return {
+            "zone_ids": zone_ids,
+            "zone_names": zone_names,
+            "zones_with_adaptive": zones_with_adaptive,
+            "zone_count": len(self._zones),
+            "zones_with_modifiers_count": zones_with_modifiers_count,
+        }
+    
+    @property
+    def available(self) -> bool:
+        """Return if entity is available."""
+        return True  # Always available
+    
+    async def async_will_remove_from_hass(self) -> None:
+        """Clean up when sensor is being removed."""
+        # Clear references
+        self._zones.clear()
+        self._coordinators.clear()
+        if "zones_sensor" in self.hass.data.get(DOMAIN, {}):
+            del self.hass.data[DOMAIN]["zones_sensor"]
+        await super().async_will_remove_from_hass()
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
@@ -330,13 +459,38 @@ async def async_setup_entry(
     2. Zone Status - Is everything working correctly
     3. Adaptive Factor - Sun-based lighting factor (if enabled)
     
+    Also creates global sensors (once):
+    1. Zones List - All zones for automation iteration
+    
     This replaces the original 7-sensor approach which would have
     created 140 sensors for 20 zones, causing UI chaos and database issues.
     """
     coordinator = hass.data[DOMAIN][entry.entry_id][DATA_COORDINATOR]
     zone_name = entry.data["zone_name"]
+    zone_id = entry.data["zone_id"]
     
     _LOGGER.info("Setting up observability sensors for zone %s", zone_name)
+    
+    # Create global zones sensor (only once, with lock for thread safety)
+    hass.data.setdefault(DOMAIN, {})
+    
+    # Initialize lock if not present
+    if "zones_sensor_lock" not in hass.data[DOMAIN]:
+        hass.data[DOMAIN]["zones_sensor_lock"] = asyncio.Lock()
+    
+    # Create global sensor with lock to prevent race conditions
+    lock = hass.data[DOMAIN]["zones_sensor_lock"]
+    async with lock:
+        if "zones_sensor" not in hass.data[DOMAIN]:
+            _LOGGER.info("Creating global zones sensor")
+            zones_sensor = GlobalZonesSensor(hass)
+            hass.data[DOMAIN]["zones_sensor"] = zones_sensor
+            async_add_entities([zones_sensor])
+    
+    # Register this zone with the global sensor
+    if "zones_sensor" in hass.data[DOMAIN]:
+        zones_sensor = hass.data[DOMAIN]["zones_sensor"]
+        zones_sensor.register_zone(entry.entry_id, zone_id, zone_name, coordinator)
     
     sensors = [
         ActiveLayerSensor(

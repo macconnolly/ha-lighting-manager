@@ -130,29 +130,25 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        """Manage the options."""
+        """Manage the options - show menu for basic or advanced."""
+        return self.async_show_menu(
+            step_id="init",
+            menu_options=["basic", "advanced", "modifier"]
+        )
+    
+    async def async_step_basic(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Handle basic options."""
         if user_input is not None:
-            # Store adaptive settings as individual values
-            options_data = {
-                "light_entities": user_input["light_entities"],
-                "default_transition": user_input["default_transition"],
-                CONF_ADAPTIVE_ENABLED: user_input[CONF_ADAPTIVE_ENABLED],
-                CONF_ADAPTIVE_BRIGHTNESS_MIN: user_input[CONF_ADAPTIVE_BRIGHTNESS_MIN],
-                CONF_ADAPTIVE_BRIGHTNESS_MAX: user_input[CONF_ADAPTIVE_BRIGHTNESS_MAX],
-                CONF_ADAPTIVE_COLOR_TEMP_MIN: user_input[CONF_ADAPTIVE_COLOR_TEMP_MIN],
-                CONF_ADAPTIVE_COLOR_TEMP_MAX: user_input[CONF_ADAPTIVE_COLOR_TEMP_MAX],
-                CONF_ADAPTIVE_ELEVATION_MIN: user_input[CONF_ADAPTIVE_ELEVATION_MIN],
-                CONF_ADAPTIVE_ELEVATION_MAX: user_input[CONF_ADAPTIVE_ELEVATION_MAX],
-            }
-            _LOGGER.info("Saving options for zone %s: light_entities=%s", 
-                        self.config_entry.data.get("zone_name"), 
-                        user_input["light_entities"])
-            return self.async_create_entry(title="", data=options_data)
-
+            # Update only the basic options
+            self.config_entry.options.update(user_input)
+            return self.async_create_entry(title="", data=self.config_entry.options)
+        
         options = self.config_entry.options
         
         return self.async_show_form(
-            step_id="init",
+            step_id="basic",
             data_schema=vol.Schema(
                 {
                     vol.Required(
@@ -168,6 +164,25 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
                         "default_transition",
                         default=options.get("default_transition", DEFAULT_TRANSITION),
                     ): vol.All(vol.Coerce(float), vol.Range(min=0.0, max=300.0)),
+                }
+            ),
+        )
+    
+    async def async_step_advanced(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Handle adaptive lighting options."""
+        if user_input is not None:
+            # Update adaptive settings
+            self.config_entry.options.update(user_input)
+            return self.async_create_entry(title="", data=self.config_entry.options)
+
+        options = self.config_entry.options
+        
+        return self.async_show_form(
+            step_id="advanced",
+            data_schema=vol.Schema(
+                {
                     vol.Optional(
                         CONF_ADAPTIVE_ENABLED,
                         default=options.get(CONF_ADAPTIVE_ENABLED, False),
@@ -199,3 +214,95 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
                 }
             ),
         )
+    
+    async def async_step_modifier(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Handle modifier layer settings."""
+        if user_input is not None:
+            # Validate priority range
+            min_priority = user_input.get("modifier_priority_min", 0)
+            max_priority = user_input.get("modifier_priority_max", 100)
+            
+            if min_priority >= max_priority:
+                return self.async_show_form(
+                    step_id="modifier",
+                    data_schema=self._get_modifier_schema(),
+                    errors={"base": "invalid_priority_range"},
+                    description_placeholders={
+                        "error": f"Minimum priority ({min_priority}) must be less than maximum ({max_priority})"
+                    }
+                )
+            
+            # Check for existing modifiers outside the new range
+            coordinator = self.hass.data.get(DOMAIN, {}).get(
+                self.config_entry.entry_id, {}
+            ).get("coordinator")
+            
+            if coordinator and hasattr(coordinator, "layers"):
+                out_of_range_modifiers = []
+                for layer_id, layer_data in coordinator.layers.items():
+                    if (layer_data.get("layer_type") in ["modifier", "multiplier"] and 
+                        (layer_data.get("priority", 50) < min_priority or 
+                         layer_data.get("priority", 50) > max_priority)):
+                        out_of_range_modifiers.append(layer_data.get("layer_name", layer_id))
+                
+                if out_of_range_modifiers:
+                    # Warn user about out-of-range modifiers
+                    return self.async_show_form(
+                        step_id="modifier_confirm",
+                        data_schema=vol.Schema({
+                            vol.Required("confirm", default=False): bool,
+                        }),
+                        description_placeholders={
+                            "warning": f"The following modifiers will be ignored with the new priority range [{min_priority}, {max_priority}]: {', '.join(out_of_range_modifiers)}"
+                        }
+                    )
+            
+            # Update modifier settings
+            self.config_entry.options.update(user_input)
+            return self.async_create_entry(title="", data=self.config_entry.options)
+        
+        return self.async_show_form(
+            step_id="modifier",
+            data_schema=self._get_modifier_schema(),
+        )
+    
+    def _get_modifier_schema(self) -> vol.Schema:
+        """Get the schema for modifier settings."""
+        options = self.config_entry.options
+        return vol.Schema(
+            {
+                vol.Optional(
+                    "k_control_enabled",
+                    default=options.get("k_control_enabled", True),
+                ): bool,
+                vol.Optional(
+                    "modifier_priority_min",
+                    default=options.get("modifier_priority_min", 0),
+                ): vol.All(vol.Coerce(int), vol.Range(min=0, max=99)),
+                vol.Optional(
+                    "modifier_priority_max",
+                    default=options.get("modifier_priority_max", 100),
+                ): vol.All(vol.Coerce(int), vol.Range(min=1, max=100)),
+                vol.Optional(
+                    "default_modifier_timeout",
+                    default=options.get("default_modifier_timeout", 0),
+                ): vol.All(vol.Coerce(float), vol.Range(min=0, max=10080)),
+            }
+        )
+    
+    async def async_step_modifier_confirm(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Confirm modifier settings despite warnings."""
+        if user_input is not None:
+            if user_input.get("confirm"):
+                # User confirmed, save the settings
+                return self.async_create_entry(title="", data=self.config_entry.options)
+            else:
+                # User cancelled, go back to modifier step
+                return await self.async_step_modifier()
+        
+        # This shouldn't happen, but handle it gracefully
+        return await self.async_step_modifier()

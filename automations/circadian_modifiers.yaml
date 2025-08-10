@@ -1,0 +1,317 @@
+# Circadian Rhythm Lighting Modifiers
+# Advanced time-based lighting adjustments that enhance rather than replace
+#
+# This showcases how modifiers can create natural lighting progressions
+# throughout the day without duplicating base configurations
+
+input_boolean:
+  circadian_lighting_enabled:
+    name: Circadian Lighting
+    icon: mdi:sun-clock
+
+input_number:
+  circadian_intensity:
+    name: Circadian Effect Intensity
+    min: 0
+    max: 100
+    step: 10
+    initial: 60
+    unit_of_measurement: "%"
+    icon: mdi:tune
+
+  wake_time_hour:
+    name: Wake Time Hour
+    min: 0
+    max: 23
+    step: 1
+    initial: 7
+    icon: mdi:alarm
+
+  sleep_time_hour:
+    name: Sleep Time Hour  
+    min: 0
+    max: 23
+    step: 1
+    initial: 22
+    icon: mdi:sleep
+
+template:
+  - sensor:
+      - name: "Circadian Phase"
+        unique_id: circadian_phase
+        state: >
+          {% set hour = now().hour %}
+          {% set minute = now().minute %}
+          {% set current_time = hour + minute/60 %}
+          {% set wake = states('input_number.wake_time_hour') | float %}
+          {% set sleep = states('input_number.sleep_time_hour') | float %}
+          
+          {% if wake <= current_time < wake + 2 %}
+            sunrise
+          {% elif wake + 2 <= current_time < 12 %}
+            morning
+          {% elif 12 <= current_time < 15 %}
+            midday
+          {% elif 15 <= current_time < 18 %}
+            afternoon
+          {% elif 18 <= current_time < sleep - 2 %}
+            evening
+          {% elif sleep - 2 <= current_time < sleep %}
+            winddown
+          {% elif sleep <= current_time or current_time < wake - 1 %}
+            night
+          {% else %}
+            predawn
+          {% endif %}
+        attributes:
+          wake_time: "{{ states('input_number.wake_time_hour') | int }}:00"
+          sleep_time: "{{ states('input_number.sleep_time_hour') | int }}:00"
+          hours_since_wake: >
+            {% set hour = now().hour %}
+            {% set wake = states('input_number.wake_time_hour') | int %}
+            {% if hour >= wake %}
+              {{ hour - wake }}
+            {% else %}
+              {{ 24 - wake + hour }}
+            {% endif %}
+          hours_until_sleep: >
+            {% set hour = now().hour %}
+            {% set sleep = states('input_number.sleep_time_hour') | int %}
+            {% if sleep > hour %}
+              {{ sleep - hour }}
+            {% else %}
+              {{ 24 - hour + sleep }}
+            {% endif %}
+          
+      - name: "Circadian Modifier Values"
+        unique_id: circadian_modifier_values
+        state: "{{ states('sensor.circadian_phase') }}"
+        attributes:
+          brightness_modifier: >
+            {% set phase = states('sensor.circadian_phase') %}
+            {% set intensity = states('input_number.circadian_intensity') | float / 100 %}
+            {% set modifiers = {
+              'predawn': -30,
+              'sunrise': 15,
+              'morning': 10,
+              'midday': 0,
+              'afternoon': -5,
+              'evening': -15,
+              'winddown': -25,
+              'night': -40
+            } %}
+            {{ (modifiers.get(phase, 0) * intensity) | round(0) }}
+          
+          color_temp_modifier: >
+            {% set phase = states('sensor.circadian_phase') %}
+            {% set intensity = states('input_number.circadian_intensity') | float / 100 %}
+            {% set hour = now().hour %}
+            {% set minute = now().minute %}
+            
+            {# Calculate position in day (0-1) with smooth curve #}
+            {% set day_position = ((hour * 60 + minute) - 6*60) / (18*60) %}
+            {% set day_position = [[0, day_position] | max, 1] | min %}
+            
+            {# Smooth sine curve for color temperature #}
+            {% set curve = (day_position * 3.14159) | sin %}
+            
+            {# Map to color temperature change in Kelvin #}
+            {% set base_shift = {
+              'predawn': -600,
+              'sunrise': -400,
+              'morning': -200,
+              'midday': 0,
+              'afternoon': -100,
+              'evening': -300,
+              'winddown': -500,
+              'night': -700
+            } %}
+            
+            {% set shift = base_shift.get(phase, 0) %}
+            {{ (shift * intensity + curve * 200 * intensity) | round(0) }}
+          
+          transition_time: >
+            {% set phase = states('sensor.circadian_phase') %}
+            {% set transitions = {
+              'predawn': 120,
+              'sunrise': 180,
+              'morning': 60,
+              'midday': 30,
+              'afternoon': 45,
+              'evening': 90,
+              'winddown': 150,
+              'night': 60
+            } %}
+            {{ transitions.get(phase, 60) }}
+          
+          priority: >
+            {# Lower priority during day, higher at night for safety #}
+            {% set phase = states('sensor.circadian_phase') %}
+            {% set priorities = {
+              'predawn': 55,
+              'sunrise': 50,
+              'morning': 45,
+              'midday': 40,
+              'afternoon': 42,
+              'evening': 48,
+              'winddown': 52,
+              'night': 55
+            } %}
+            {{ priorities.get(phase, 45) }}
+
+automation:
+  - alias: "Lighting: Circadian Rhythm Controller"
+    id: lighting_circadian_rhythm_controller
+    description: >
+      Applies natural circadian lighting modifiers throughout the day.
+      Creates smooth, biologically-aligned transitions.
+    mode: restart
+    
+    trigger:
+      # Phase changes
+      - platform: state
+        entity_id: sensor.circadian_phase
+        id: phase_change
+      
+      # Manual enable/disable
+      - platform: state
+        entity_id: input_boolean.circadian_lighting_enabled
+        id: toggle
+      
+      # Settings changes
+      - platform: state
+        entity_id:
+          - input_number.circadian_intensity
+          - input_number.wake_time_hour
+          - input_number.sleep_time_hour
+        id: settings
+      
+      # Periodic update for smooth transitions
+      - platform: time_pattern
+        minutes: "/5"
+        id: periodic
+    
+    condition:
+      - condition: state
+        entity_id: input_boolean.circadian_lighting_enabled
+        state: "on"
+    
+    variables:
+      brightness_mod: "{{ state_attr('sensor.circadian_modifier_values', 'brightness_modifier') | int }}"
+      color_mod: "{{ state_attr('sensor.circadian_modifier_values', 'color_temp_modifier') | int }}"
+      transition: "{{ state_attr('sensor.circadian_modifier_values', 'transition_time') | int }}"
+      priority: "{{ state_attr('sensor.circadian_modifier_values', 'priority') | int }}"
+      all_zones: "{{ state_attr('sensor.lighting_manager_zones', 'zone_ids') }}"
+    
+    action:
+      - choose:
+          # Disable circadian when turned off
+          - conditions:
+              - condition: trigger
+                id: toggle
+              - condition: state
+                entity_id: input_boolean.circadian_lighting_enabled
+                state: "off"
+            sequence:
+              - repeat:
+                  for_each: "{{ all_zones }}"
+                  sequence:
+                    - service: switch.turn_off
+                      target:
+                        entity_id: "switch.{{ repeat.item }}_circadian_modifier_layer"
+                      continue_on_error: true
+          
+          # Apply circadian modifiers
+          default:
+            - repeat:
+                for_each: "{{ all_zones }}"
+                sequence:
+                  # Check if zone should receive circadian
+                  - condition: template
+                    value_template: >
+                      {% set active_layer = states('sensor.' ~ repeat.item ~ '_active_layer') %}
+                      {{ active_layer not in ['none', 'unavailable', 'unknown'] }}
+                  
+                  - service: lighting_manager.set_layer
+                    data:
+                      zone_id: "{{ repeat.item }}"
+                      layer_id: "circadian_modifier"
+                      layer_name: "Circadian Rhythm"
+                      layer_type: "modifier"
+                      priority: "{{ priority }}"
+                      brightness_pct_delta: "{{ brightness_mod }}"
+                      color_temp_kelvin_delta: "{{ color_mod }}"
+                      transition: "{{ transition }}"
+                      timeout_minutes: 15
+                  
+                  - service: switch.turn_on
+                    target:
+                      entity_id: "switch.{{ repeat.item }}_circadian_modifier_layer"
+                  
+                  # Stagger updates to prevent load spike
+                  - delay:
+                      milliseconds: 100
+
+  - alias: "Lighting: Sunrise Simulation"
+    id: lighting_sunrise_simulation
+    description: >
+      Gradually increases brightness before wake time.
+      Uses progressive modifiers for natural wake experience.
+    mode: single
+    
+    trigger:
+      - platform: template
+        value_template: >
+          {% set wake_hour = states('input_number.wake_time_hour') | int %}
+          {% set current_hour = now().hour %}
+          {% set current_minute = now().minute %}
+          {{ current_hour == (wake_hour - 1) % 24 and current_minute == 30 }}
+    
+    condition:
+      - condition: state
+        entity_id: input_boolean.circadian_lighting_enabled
+        state: "on"
+    
+    action:
+      # Get bedrooms or specified wake zones
+      - variables:
+          wake_zones: >
+            {% set all_zones = state_attr('sensor.lighting_manager_zones', 'zone_ids') %}
+            {% set wake_zones = namespace(zones=[]) %}
+            {% for zone in all_zones %}
+              {% if 'bedroom' in zone or 'master' in zone %}
+                {% set wake_zones.zones = wake_zones.zones + [zone] %}
+              {% endif %}
+            {% endfor %}
+            {{ wake_zones.zones if wake_zones.zones else all_zones[:2] }}
+      
+      # 30-minute gradual sunrise
+      - repeat:
+          count: 6
+          sequence:
+            - variables:
+                step: "{{ repeat.index }}"
+                brightness_boost: "{{ step * 8 }}"
+                color_shift: "{{ -800 + (step * 100) }}"
+            
+            - repeat:
+                for_each: "{{ wake_zones }}"
+                sequence:
+                  - service: lighting_manager.set_layer
+                    data:
+                      zone_id: "{{ repeat.item }}"
+                      layer_id: "sunrise_simulation"
+                      layer_name: "Sunrise"
+                      layer_type: "modifier"
+                      priority: 60
+                      brightness_pct_delta: "{{ brightness_boost }}"
+                      color_temp_kelvin_delta: "{{ color_shift }}"
+                      transition: 300  # 5-minute transitions
+                      timeout_minutes: 10
+                  
+                  - service: switch.turn_on
+                    target:
+                      entity_id: "switch.{{ repeat.item }}_sunrise_simulation_layer"
+            
+            - delay:
+                minutes: 5

@@ -53,6 +53,7 @@ from .const import (
     LAYER_BASE_ADAPTIVE,
     LAYER_TYPE_ABSOLUTE,
     LAYER_TYPE_MODIFIER,
+    LAYER_TYPE_MULTIPLIER,
     STORAGE_KEY_PREFIX,
     STORAGE_VERSION,
 )
@@ -134,9 +135,12 @@ class ZoneCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._cleanup_task: asyncio.Task | None = None
         self._cleanup_interval = 60  # Check every minute for expired layers
         
-        # Zone configuration (e.g., k_control_enabled)
+        # Zone configuration with modifier settings from Phase 6
         self.zone_config = {
             "k_control_enabled": entry.options.get("k_control_enabled", True),
+            "modifier_priority_min": entry.options.get("modifier_priority_min", 0),
+            "modifier_priority_max": entry.options.get("modifier_priority_max", 100),
+            "default_modifier_timeout": entry.options.get("default_modifier_timeout", 0),
             "zone_id": self.zone_id,
             "zone_name": self.zone_name,
         }
@@ -319,8 +323,18 @@ class ZoneCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         }
         
         # Handle expiration if timeout_minutes provided
+        # Use default_modifier_timeout for modifier layers if not specified
+        layer_type = attributes.get(ATTR_LAYER_TYPE, LAYER_TYPE_ABSOLUTE)
+        default_timeout = self.zone_config.get("default_modifier_timeout", 0)
+        
         if "timeout_minutes" in attributes:
             timeout_minutes = attributes["timeout_minutes"]
+        elif layer_type in [LAYER_TYPE_MODIFIER, LAYER_TYPE_MULTIPLIER] and default_timeout > 0:
+            timeout_minutes = default_timeout
+        else:
+            timeout_minutes = None
+        
+        if timeout_minutes:
             expires_at = now + timedelta(minutes=timeout_minutes)
             self.layers[layer_id][ATTR_EXPIRES_AT] = expires_at
         elif ATTR_EXPIRES_AT in attributes:

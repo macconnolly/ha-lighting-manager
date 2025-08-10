@@ -159,10 +159,25 @@ class LightingCalculator:
         # Modifiers apply if:
         # 1. They have higher priority than the winning absolute layer, OR
         # 2. They have the force flag set
+        # AND they must be within the zone's configured priority range
         applicable_modifiers = []
+        min_priority = zone_config.get("modifier_priority_min", 0) if zone_config else 0
+        max_priority = zone_config.get("modifier_priority_max", 100) if zone_config else 100
+        
         for modifier in modifier_layers:
             mod_priority = modifier.get(ATTR_PRIORITY, 0)
             mod_forced = modifier.get(ATTR_FORCE, False)
+            
+            # Check if modifier is within allowed priority range
+            if mod_priority < min_priority or mod_priority > max_priority:
+                calculation_path.append({
+                    "step": "modifier_out_of_range",
+                    "layer": modifier.get(ATTR_LAYER_ID, "unknown"),
+                    "priority": mod_priority,
+                    "allowed_range": [min_priority, max_priority],
+                    "result": "ignored"
+                })
+                continue
             
             if mod_forced or mod_priority > winning_priority:
                 applicable_modifiers.append(modifier)

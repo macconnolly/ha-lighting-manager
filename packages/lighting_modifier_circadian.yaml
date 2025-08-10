@@ -1,0 +1,241 @@
+# Circadian Rhythm Lighting Modifiers Package
+# Time-of-day lighting adjustments that respect biological rhythms
+#
+# Architectural Compliance:
+# - Pure modifiers, no absolute state changes
+# - Minimal sensors (state visibility)
+# - Event-driven transitions
+# - Single responsibility per automation
+
+input_boolean:
+  circadian_lighting:
+    name: Circadian Lighting
+    icon: mdi:sun-clock
+
+template:
+  - sensor:
+      - name: "Circadian Lighting Phase"
+        unique_id: circadian_lighting_phase
+        state: >
+          {% set sun_elevation = state_attr('sun.sun', 'elevation') | float(0) %}
+          {% set hour = now().hour %}
+          
+          {% if sun_elevation < -6 %}
+            night
+          {% elif sun_elevation < 0 %}
+            twilight
+          {% elif sun_elevation < 6 %}
+            dawn
+          {% elif sun_elevation < 15 and hour < 12 %}
+            morning
+          {% elif sun_elevation > 30 %}
+            day
+          {% elif sun_elevation > 15 and hour > 15 %}
+            afternoon
+          {% elif sun_elevation > 6 %}
+            dusk
+          {% else %}
+            evening
+          {% endif %}
+        
+        attributes:
+          sun_elevation: "{{ state_attr('sun.sun', 'elevation') | round(1) }}"
+          solar_azimuth: "{{ state_attr('sun.sun', 'azimuth') | round(1) }}"
+          
+          modifier_priority: >
+            {% set phase = states('sensor.circadian_lighting_phase') %}
+            {# Lower priority during day, higher at transition times #}
+            {% set priorities = {
+              'night': 45,
+              'twilight': 52,
+              'dawn': 54,
+              'morning': 48,
+              'day': 42,
+              'afternoon': 46,
+              'dusk': 53,
+              'evening': 50
+            } %}
+            {{ priorities.get(phase, 45) }}
+          
+          brightness_modifier: >
+            {% set phase = states('sensor.circadian_lighting_phase') %}
+            {% set modifiers = {
+              'night': -25,
+              'twilight': -18,
+              'dawn': -10,
+              'morning': 5,
+              'day': 0,
+              'afternoon': -3,
+              'dusk': -12,
+              'evening': -20
+            } %}
+            {{ modifiers.get(phase, 0) }}
+          
+          color_temp_modifier: >
+            {% set sun_elevation = state_attr('sun.sun', 'elevation') | float(0) %}
+            
+            {# Calculate warmth based on sun position #}
+            {% if sun_elevation < -6 %}
+              -600  {# Very warm at night #}
+            {% elif sun_elevation < 0 %}
+              -450  {# Warm twilight #}
+            {% elif sun_elevation < 10 %}
+              -300  {# Sunrise/sunset warmth #}
+            {% elif sun_elevation < 30 %}
+              -150  {# Slight warmth #}
+            {% elif sun_elevation > 45 %}
+              100   {# Cool midday light #}
+            {% else %}
+              0     {# Neutral #}
+            {% endif %}
+          
+          transition_seconds: >
+            {% set phase = states('sensor.circadian_lighting_phase') %}
+            {# Slow transitions for natural feel #}
+            {% set transitions = {
+              'night': 60,
+              'twilight': 120,
+              'dawn': 180,
+              'morning': 90,
+              'day': 60,
+              'afternoon': 60,
+              'dusk': 150,
+              'evening': 90
+            } %}
+            {{ transitions.get(phase, 60) }}
+
+automation:
+  - alias: "Lighting: Circadian Phase Modifiers"
+    id: lighting_circadian_phase_modifiers
+    description: "Apply time-appropriate lighting modifiers based on sun position"
+    mode: restart
+    
+    trigger:
+      # Phase changes
+      - platform: state
+        entity_id: sensor.circadian_lighting_phase
+        variables:
+          trigger_type: phase_change
+      
+      # Manual toggle
+      - platform: state
+        entity_id: input_boolean.circadian_lighting
+        variables:
+          trigger_type: manual_toggle
+      
+      # Periodic refresh for active modifiers
+      - platform: time_pattern
+        minutes: "/10"
+        variables:
+          trigger_type: refresh
+    
+    condition:
+      - condition: state
+        entity_id: input_boolean.circadian_lighting
+        state: "on"
+    
+    variables:
+      phase: "{{ states('sensor.circadian_lighting_phase') }}"
+      brightness_mod: "{{ state_attr('sensor.circadian_lighting_phase', 'brightness_modifier') | int }}"
+      color_mod: "{{ state_attr('sensor.circadian_lighting_phase', 'color_temp_modifier') | int }}"
+      priority: "{{ state_attr('sensor.circadian_lighting_phase', 'modifier_priority') | int }}"
+      transition: "{{ state_attr('sensor.circadian_lighting_phase', 'transition_seconds') | int }}"
+    
+    action:
+      - choose:
+          # Disable when turned off
+          - conditions:
+              - "{{ trigger_type == 'manual_toggle' }}"
+              - condition: state
+                entity_id: input_boolean.circadian_lighting
+                state: "off"
+            sequence:
+              - service: switch.turn_off
+                target:
+                  entity_id: >
+                    {{ expand(state_attr('sensor.lighting_manager_zones', 'zone_ids') | default([])
+                       | map('regex_replace', '(.*)', 'switch.\\1_circadian_layer') | list)
+                       | selectattr('state', 'eq', 'on')
+                       | map(attribute='entity_id') | list }}
+                continue_on_error: true
+          
+          # Apply circadian modifiers
+          default:
+            - repeat:
+                for_each: "{{ state_attr('sensor.lighting_manager_zones', 'zone_ids') | default([]) }}"
+                sequence:
+                  # Only apply to zones with active lighting
+                  - condition: template
+                    value_template: >
+                      {% set active = states('sensor.' ~ repeat.item ~ '_active_layer') %}
+                      {{ active not in ['none', 'unavailable', 'unknown'] }}
+                  
+                  - service: lighting_manager.set_layer
+                    data:
+                      zone_id: "{{ repeat.item }}"
+                      layer_id: "circadian"
+                      layer_name: "Circadian: {{ phase | title }}"
+                      layer_type: "modifier"
+                      priority: "{{ priority }}"
+                      brightness_pct_delta: "{{ brightness_mod }}"
+                      color_temp_kelvin_delta: "{{ color_mod }}"
+                      transition: "{{ transition }}"
+                      timeout_minutes: 15
+                  
+                  - service: switch.turn_on
+                    target:
+                      entity_id: "switch.{{ repeat.item }}_circadian_layer"
+                    continue_on_error: true
+
+  - alias: "Lighting: Bedtime Wind Down"
+    id: lighting_bedtime_wind_down
+    description: "Progressive dimming and warming before sleep"
+    mode: single
+    
+    trigger:
+      - platform: time
+        at: "21:30:00"
+    
+    condition:
+      - condition: state
+        entity_id: input_boolean.circadian_lighting
+        state: "on"
+    
+    action:
+      # Find bedroom zones
+      - variables:
+          bedroom_zones: >
+            {% set all_zones = state_attr('sensor.lighting_manager_zones', 'zone_ids') | default([]) %}
+            {{ all_zones | select('search', 'bedroom|master|sleep') | list }}
+      
+      # Apply progressive wind-down over 90 minutes
+      - repeat:
+          count: 3
+          sequence:
+            - variables:
+                step: "{{ repeat.index }}"
+                brightness_reduction: "{{ step * 12 }}"
+                warmth_increase: "{{ step * 200 }}"
+            
+            - repeat:
+                for_each: "{{ bedroom_zones }}"
+                sequence:
+                  - service: lighting_manager.set_layer
+                    data:
+                      zone_id: "{{ repeat.item }}"
+                      layer_id: "bedtime_winddown"
+                      layer_name: "Bedtime Wind Down"
+                      layer_type: "modifier"
+                      priority: 58
+                      brightness_pct_delta: "{{ -brightness_reduction }}"
+                      color_temp_kelvin_delta: "{{ -warmth_increase }}"
+                      transition: 600  # 10-minute transitions
+                      timeout_minutes: 35
+                  
+                  - service: switch.turn_on
+                    target:
+                      entity_id: "switch.{{ repeat.item }}_bedtime_winddown_layer"
+                    continue_on_error: true
+            
+            - delay:
+                minutes: 30

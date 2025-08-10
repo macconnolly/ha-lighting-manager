@@ -1,0 +1,267 @@
+# Weather-Based Lighting Modifiers Package
+# Production-ready weather response system using modifier layers
+# 
+# Architectural Compliance:
+# - No new features, only modifiers that enhance existing layers
+# - Event-driven, no polling except for timeout refresh
+# - Single purpose per automation
+# - All state visible in UI via sensors
+# - Graceful degradation with fallbacks
+
+template:
+  - sensor:
+      - name: "Lighting Weather Impact"
+        unique_id: lighting_weather_impact
+        state: >
+          {% set condition = states('weather.home') %}
+          {% set cloud_coverage = state_attr('weather.home', 'cloud_coverage') | default(0) | int %}
+          
+          {# Map conditions to impact scores (0-100) #}
+          {% set base_scores = {
+            'sunny': 0,
+            'clear-night': 0,
+            'partlycloudy': 15,
+            'cloudy': 30,
+            'fog': 45,
+            'windy': 10,
+            'windy-variant': 25,
+            'rainy': 50,
+            'pouring': 70,
+            'lightning': 40,
+            'lightning-rainy': 65,
+            'snowy': 55,
+            'snowy-rainy': 60,
+            'hail': 75,
+            'exceptional': 85
+          } %}
+          
+          {% set base = base_scores.get(condition, 20) %}
+          
+          {# Adjust based on cloud coverage if available #}
+          {% if cloud_coverage > 0 %}
+            {% set cloud_factor = (cloud_coverage / 100) * 20 %}
+            {% set score = (base * 0.7 + cloud_factor * 0.3) | round(0) %}
+          {% else %}
+            {% set score = base %}
+          {% endif %}
+          
+          {{ score | int }}
+        
+        attributes:
+          condition: "{{ states('weather.home') }}"
+          cloud_coverage: "{{ state_attr('weather.home', 'cloud_coverage') | default(0) }}"
+          requires_modifier: >
+            {{ states('sensor.lighting_weather_impact') | int >= 25 }}
+          
+          brightness_delta: >
+            {% set score = states('sensor.lighting_weather_impact') | int %}
+            {% set hour = now().hour %}
+            
+            {# Scale brightness boost based on impact and time of day #}
+            {% if 6 <= hour <= 20 %}
+              {# Daytime: full boost #}
+              {% if score >= 70 %}
+                25
+              {% elif score >= 50 %}
+                18
+              {% elif score >= 30 %}
+                12
+              {% elif score >= 25 %}
+                8
+              {% else %}
+                0
+              {% endif %}
+            {% else %}
+              {# Nighttime: reduced boost #}
+              {% if score >= 70 %}
+                15
+              {% elif score >= 50 %}
+                10
+              {% elif score >= 30 %}
+                6
+              {% else %}
+                0
+              {% endif %}
+            {% endif %}
+          
+          color_temp_delta: >
+            {% set score = states('sensor.lighting_weather_impact') | int %}
+            {% set condition = states('weather.home') %}
+            
+            {# Warmer light for comfort during bad weather #}
+            {% if 'lightning' in condition %}
+              -200  {# Less warm during storms for visibility #}
+            {% elif 'snow' in condition %}
+              -400  {# Warm contrast to cold outside #}
+            {% elif score >= 50 %}
+              -350
+            {% elif score >= 30 %}
+              -250
+            {% elif score >= 25 %}
+              -150
+            {% else %}
+              0
+            {% endif %}
+
+automation:
+  - alias: "Lighting: Weather Impact Response"
+    id: lighting_weather_impact_response
+    description: "Apply weather-based lighting modifiers when conditions warrant"
+    mode: single
+    
+    trigger:
+      # React to weather changes
+      - platform: state
+        entity_id: weather.home
+        variables:
+          trigger_type: weather_change
+      
+      # React to impact score crossing thresholds
+      - platform: numeric_state
+        entity_id: sensor.lighting_weather_impact
+        above: 24
+        variables:
+          trigger_type: threshold_exceeded
+      
+      - platform: numeric_state
+        entity_id: sensor.lighting_weather_impact
+        below: 20
+        variables:
+          trigger_type: threshold_cleared
+      
+      # Refresh active modifiers before expiry
+      - platform: time_pattern
+        minutes: "/55"
+        variables:
+          trigger_type: refresh
+    
+    variables:
+      impact_score: "{{ states('sensor.lighting_weather_impact') | int }}"
+      needs_modifier: "{{ state_attr('sensor.lighting_weather_impact', 'requires_modifier') }}"
+      brightness_delta: "{{ state_attr('sensor.lighting_weather_impact', 'brightness_delta') | int }}"
+      color_delta: "{{ state_attr('sensor.lighting_weather_impact', 'color_temp_delta') | int }}"
+    
+    condition:
+      # Skip nighttime refresh unless significant weather
+      - or:
+          - "{{ trigger_type != 'refresh' }}"
+          - "{{ 6 <= now().hour <= 22 }}"
+          - "{{ impact_score >= 50 }}"
+    
+    action:
+      - choose:
+          # Apply weather modifiers
+          - conditions:
+              - "{{ needs_modifier }}"
+              - "{{ trigger_type != 'threshold_cleared' }}"
+            sequence:
+              - variables:
+                  zones: "{{ state_attr('sensor.lighting_manager_zones', 'zone_ids') | default([]) }}"
+                  priority: >
+                    {% if impact_score >= 70 %}
+                      68
+                    {% elif impact_score >= 50 %}
+                      65
+                    {% else %}
+                      62
+                    {% endif %}
+              
+              - repeat:
+                  for_each: "{{ zones }}"
+                  sequence:
+                    # Only apply if zone has active lighting
+                    - condition: template
+                      value_template: >
+                        {% set status = states('sensor.' ~ repeat.item ~ '_status') %}
+                        {{ status not in ['unavailable', 'unknown', 'error'] }}
+                    
+                    - service: lighting_manager.set_layer
+                      data:
+                        zone_id: "{{ repeat.item }}"
+                        layer_id: "weather_impact"
+                        layer_name: "Weather: {{ states('weather.home') | replace('-', ' ') | title }}"
+                        layer_type: "modifier"
+                        priority: "{{ priority }}"
+                        brightness_pct_delta: "{{ brightness_delta }}"
+                        color_temp_kelvin_delta: "{{ color_delta }}"
+                        transition: >
+                          {% if trigger_type == 'refresh' %}
+                            30
+                          {% elif 'lightning' in states('weather.home') %}
+                            1
+                          {% else %}
+                            5
+                          {% endif %}
+                        timeout_minutes: 60
+                    
+                    - service: switch.turn_on
+                      target:
+                        entity_id: "switch.{{ repeat.item }}_weather_impact_layer"
+                      continue_on_error: true
+          
+          # Remove weather modifiers
+          - conditions:
+              - "{{ not needs_modifier }}"
+              - "{{ trigger_type == 'threshold_cleared' }}"
+            sequence:
+              - service: switch.turn_off
+                target:
+                  entity_id: >
+                    {{ expand(state_attr('sensor.lighting_manager_zones', 'zone_ids') | default([])
+                       | map('regex_replace', '(.*)', 'switch.\\1_weather_impact_layer') | list) 
+                       | selectattr('state', 'eq', 'on')
+                       | map(attribute='entity_id') | list }}
+                continue_on_error: true
+
+  - alias: "Lighting: Storm Safety Enhancement"
+    id: lighting_storm_safety_enhancement
+    description: "Immediate bright lighting during severe weather for safety"
+    mode: single
+    
+    trigger:
+      - platform: state
+        entity_id: weather.home
+        to:
+          - lightning
+          - lightning-rainy
+          - hail
+          - exceptional
+    
+    action:
+      # Apply high-priority safety lighting
+      - repeat:
+          for_each: "{{ state_attr('sensor.lighting_manager_zones', 'zone_ids') | default([]) }}"
+          sequence:
+            - service: lighting_manager.set_layer
+              data:
+                zone_id: "{{ repeat.item }}"
+                layer_id: "storm_safety"
+                layer_name: "Storm Safety"
+                layer_type: "modifier"
+                priority: 85  # Very high priority
+                brightness_pct_delta: 40  # Significant brightness boost
+                color_temp_kelvin_delta: 200  # Cooler for alertness
+                transition: 0.5  # Near instant
+                timeout_minutes: 30
+            
+            - service: switch.turn_on
+              target:
+                entity_id: "switch.{{ repeat.item }}_storm_safety_layer"
+              continue_on_error: true
+      
+      # Schedule removal check
+      - delay:
+          minutes: 5
+      
+      - condition: template
+        value_template: >
+          {{ states('weather.home') not in ['lightning', 'lightning-rainy', 'hail', 'exceptional'] }}
+      
+      - service: switch.turn_off
+        target:
+          entity_id: >
+            {{ expand(state_attr('sensor.lighting_manager_zones', 'zone_ids') | default([])
+               | map('regex_replace', '(.*)', 'switch.\\1_storm_safety_layer') | list) 
+               | selectattr('state', 'eq', 'on')
+               | map(attribute='entity_id') | list }}
+        continue_on_error: true
