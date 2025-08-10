@@ -79,11 +79,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     
     # Register services ONCE at domain level
     if len(hass.data[DOMAIN]) == 1:  # First zone being set up
+        from .services import async_setup_services
         await async_setup_services(hass)
-        
-        # Register Phase 3 services
-        from .services import async_setup_services as setup_phase3_services
-        await setup_phase3_services(hass)
     
     # Phase 2: Trigger initial calculation if there are active layers
     if any(layer.get("is_on", False) for layer in coordinator.layers.values()):
@@ -138,12 +135,3 @@ async def async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
         await async_unload_entry(hass, entry)
         await async_setup_entry(hass, entry)
 
-
-async def async_setup_services(hass: HomeAssistant) -> None:
-    """Set up services for Lighting Manager.
-    
-    This function is kept for compatibility but all service registration
-    is now handled by the consolidated services.py module.
-    """
-    # All services are now registered through services.py
-    pass
