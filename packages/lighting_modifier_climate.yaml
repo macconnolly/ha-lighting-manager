@@ -106,7 +106,7 @@ automation:
                         is_on: true
           
           # Remove climate modifiers when HVAC is idle or disabled
-          default:
+        default:
             - service: switch.turn_off
               target:
                 entity_id: >
