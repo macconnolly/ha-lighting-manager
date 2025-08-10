@@ -224,7 +224,7 @@ automation:
                         entity_id: "switch.{{ repeat.item }}_guest_preferences_layer"
           
           # Remove guest overrides
-          default:
+        default:
             - service: switch.turn_off
               target:
                 entity_id: >
