@@ -841,7 +841,7 @@ async def handle_force_layer(hass: HomeAssistant, call: ServiceCall) -> ServiceR
     force_value = call.data.get("force", True)
     
     try:
-        coordinator = await _get_zone_coordinator(hass, zone_id)
+        coordinator = await _get_coordinator_from_call(hass, call)
         success = await coordinator.update_layer(
             layer_id,
             **{ATTR_FORCE: force_value}
@@ -880,7 +880,7 @@ async def handle_unforce_layer(hass: HomeAssistant, call: ServiceCall) -> Servic
     layer_id = call.data["layer_id"]
     
     try:
-        coordinator = await _get_zone_coordinator(hass, zone_id)
+        coordinator = await _get_coordinator_from_call(hass, call)
         success = await coordinator.update_layer(
             layer_id,
             **{ATTR_FORCE: False}
@@ -918,7 +918,7 @@ async def handle_recalculate_zone(hass: HomeAssistant, call: ServiceCall) -> Ser
     zone_id = call.data["zone_id"]
     
     try:
-        coordinator = await _get_zone_coordinator(hass, zone_id)
+        coordinator = await _get_coordinator_from_call(hass, call)
     except ServiceValidationError as e:
         return ServiceResponse(iserr=True, data={"error": str(e)})
     
@@ -948,7 +948,7 @@ async def handle_reset_zone(hass: HomeAssistant, call: ServiceCall) -> ServiceRe
     zone_id = call.data["zone_id"]
     
     try:
-        coordinator = await _get_zone_coordinator(hass, zone_id)
+        coordinator = await _get_coordinator_from_call(hass, call)
     except ServiceValidationError as e:
         return ServiceResponse(iserr=True, data={"error": str(e)})
     
@@ -992,7 +992,7 @@ async def handle_apply_preset(hass: HomeAssistant, call: ServiceCall) -> Service
     transition = call.data.get(ATTR_TRANSITION, 2.0)
     
     try:
-        coordinator = await _get_zone_coordinator(hass, zone_id)
+        coordinator = await _get_coordinator_from_call(hass, call)
     except ServiceValidationError as e:
         return ServiceResponse(iserr=True, data={"error": str(e)})
     

@@ -14,15 +14,15 @@ set_layer:
         text:
     layer_id:
       name: Layer ID
-      description: Unique identifier for the layer (created from layer name)
-      required: true
+      description: Unique identifier for the layer (auto-generated from layer_name if not provided)
+      required: false
       example: "weather_boost"
       selector:
         text:
     layer_name:
       name: Layer Name
-      description: Human-readable layer name (optional, defaults to layer_id)
-      required: false
+      description: Human-readable layer name
+      required: true
       example: "Weather Boost"
       selector:
         text:
