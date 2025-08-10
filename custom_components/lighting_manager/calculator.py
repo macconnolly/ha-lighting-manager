@@ -22,6 +22,19 @@ ATTR_FORCE = "force"
 ATTR_LOCKED = "locked"
 ATTR_LAYER_NAME = "layer_name"
 ATTR_LAYER_ID = "layer_id"
+ATTR_LAYER_TYPE = "layer_type"
+
+# Modifier-specific attributes
+ATTR_BRIGHTNESS_PCT_DELTA = "brightness_pct_delta"
+ATTR_COLOR_TEMP_KELVIN_DELTA = "color_temp_kelvin_delta"
+ATTR_BRIGHTNESS_FACTOR = "brightness_factor"
+ATTR_COLOR_TEMP_FACTOR = "color_temp_factor"
+ATTR_EXPIRES_AT = "expires_at"
+
+# Layer types
+LAYER_TYPE_ABSOLUTE = "absolute"
+LAYER_TYPE_MODIFIER = "modifier"
+LAYER_TYPE_MULTIPLIER = "multiplier"
 
 
 class LightingCalculator:
@@ -36,13 +49,14 @@ class LightingCalculator:
         self._cache_hits = 0
         self._cache_misses = 0
     
-    def calculate_state(self, layers: list[dict[str, Any]]) -> dict[str, Any]:
+    def calculate_state(self, layers: list[dict[str, Any]], zone_config: dict[str, Any] = None) -> dict[str, Any]:
         """Calculate final state from active layers.
         
         This is the main entry point for calculations.
         
         Args:
             layers: List of active layer dictionaries
+            zone_config: Optional zone configuration (e.g., k_control_enabled)
             
         Returns:
             Dictionary with winning layer, final state, conflicts, etc.
@@ -65,8 +79,8 @@ class LightingCalculator:
         
         self._cache_misses += 1
         
-        # Perform calculation
-        result = self._calculate(layers)
+        # Perform calculation with zone config
+        result = self._calculate(layers, zone_config)
         
         # Add timing and cache info
         result["calculation_time_ms"] = (time.perf_counter() - start_time) * 1000
@@ -82,19 +96,20 @@ class LightingCalculator:
         
         return result
     
-    def _calculate(self, layers: list[dict[str, Any]]) -> dict[str, Any]:
-        """Perform the actual calculation logic.
+    def _calculate(self, layers: list[dict[str, Any]], zone_config: dict[str, Any] = None) -> dict[str, Any]:
+        """Perform the actual calculation logic with modifier support.
         
-        Pure priority-based calculation:
-        - Only considers layers where is_on=True
-        - Applies priority rules to determine winner
-        - No condition evaluation (that's external)
+        Enhanced calculation:
+        - Separates absolute and modifier layers
+        - Finds winning absolute layer
+        - Applies applicable modifiers
+        - Returns combined result
         """
         conflicts = []
         calculation_path = []
+        applied_modifiers = []
         
         # Filter to only active layers (is_on=True)
-        # External automations handle all condition logic
         active_layers = [
             l for l in layers 
             if l.get(ATTR_IS_ON, False)
@@ -107,15 +122,94 @@ class LightingCalculator:
             })
             return self._empty_result()
         
+        # Separate layers by type
+        absolute_layers = [
+            l for l in active_layers 
+            if l.get(ATTR_LAYER_TYPE, LAYER_TYPE_ABSOLUTE) == LAYER_TYPE_ABSOLUTE
+        ]
+        modifier_layers = [
+            l for l in active_layers 
+            if l.get(ATTR_LAYER_TYPE, LAYER_TYPE_ABSOLUTE) in [LAYER_TYPE_MODIFIER, LAYER_TYPE_MULTIPLIER]
+        ]
+        
         calculation_path.append({
-            "step": "found_active_layers",
-            "count": len(active_layers),
-            "layers": [l.get(ATTR_LAYER_ID, "unknown") for l in active_layers]
+            "step": "layer_separation",
+            "absolute_count": len(absolute_layers),
+            "modifier_count": len(modifier_layers),
+            "absolute_layers": [l.get(ATTR_LAYER_ID, "unknown") for l in absolute_layers],
+            "modifier_layers": [l.get(ATTR_LAYER_ID, "unknown") for l in modifier_layers]
         })
         
+        # Must have at least one absolute layer
+        if not absolute_layers:
+            calculation_path.append({
+                "step": "no_absolute_layers",
+                "result": "cannot_apply_modifiers_without_base"
+            })
+            return self._empty_result()
+        
+        # Find winning absolute layer (same logic as before)
+        winning_layer = self._find_winning_absolute_layer(absolute_layers, conflicts, calculation_path)
+        
+        # Build base state from winning layer
+        final_state = self._build_final_state(winning_layer)
+        winning_priority = winning_layer.get(ATTR_PRIORITY, 0)
+        
+        # Find applicable modifiers
+        # Modifiers apply if:
+        # 1. They have higher priority than the winning absolute layer, OR
+        # 2. They have the force flag set
+        applicable_modifiers = []
+        for modifier in modifier_layers:
+            mod_priority = modifier.get(ATTR_PRIORITY, 0)
+            mod_forced = modifier.get(ATTR_FORCE, False)
+            
+            if mod_forced or mod_priority > winning_priority:
+                applicable_modifiers.append(modifier)
+        
+        if applicable_modifiers:
+            calculation_path.append({
+                "step": "applying_modifiers",
+                "count": len(applicable_modifiers),
+                "modifiers": [m.get(ATTR_LAYER_ID, "unknown") for m in applicable_modifiers]
+            })
+            
+            # Sort modifiers by priority (lower priority applies first)
+            applicable_modifiers.sort(key=lambda x: x.get(ATTR_PRIORITY, 0))
+            
+            # Apply each modifier in sequence
+            for modifier in applicable_modifiers:
+                final_state = self._apply_modifier(final_state, modifier, zone_config)
+                applied_modifiers.append({
+                    "id": modifier.get(ATTR_LAYER_ID, "unknown"),
+                    "name": modifier.get(ATTR_LAYER_NAME, "Unknown"),
+                    "type": modifier.get(ATTR_LAYER_TYPE, LAYER_TYPE_MODIFIER),
+                    "priority": modifier.get(ATTR_PRIORITY, 0)
+                })
+        
+        # Create result description
+        if applied_modifiers:
+            winning_name = f"{winning_layer.get(ATTR_LAYER_NAME, 'Unknown')} + {len(applied_modifiers)} modifier(s)"
+        else:
+            winning_name = winning_layer.get(ATTR_LAYER_NAME, "Unknown")
+        
+        return {
+            "winning_layer": winning_layer.get(ATTR_LAYER_ID, "unknown"),
+            "winning_layer_name": winning_name,
+            "final_state": final_state,
+            "conflicts": conflicts,
+            "calculation_path": calculation_path,
+            "applied_modifiers": applied_modifiers,
+            "total_active_layers": len(active_layers),
+            "forced_layer_active": winning_layer.get(ATTR_FORCE, False) or any(m.get(ATTR_FORCE, False) for m in applied_modifiers),
+        }
+    
+    def _find_winning_absolute_layer(self, absolute_layers: list[dict[str, Any]], 
+                                    conflicts: list, calculation_path: list) -> dict[str, Any]:
+        """Find the winning absolute layer using standard priority rules."""
         # Separate forced and normal layers
-        forced_layers = [l for l in active_layers if l.get(ATTR_FORCE, False)]
-        normal_layers = [l for l in active_layers if not l.get(ATTR_FORCE, False)]
+        forced_layers = [l for l in absolute_layers if l.get(ATTR_FORCE, False)]
+        normal_layers = [l for l in absolute_layers if not l.get(ATTR_FORCE, False)]
         
         # Check for multiple force flags (conflict)
         if len(forced_layers) > 1:
@@ -130,7 +224,10 @@ class LightingCalculator:
             # Force flag overrides normal priority
             forced_layers.sort(key=lambda x: x.get(ATTR_PRIORITY, 0), reverse=True)
             winning_layer = forced_layers[0]
-            calculation_path = [l.get(ATTR_LAYER_ID) for l in forced_layers]
+            calculation_path.append({
+                "step": "forced_winner",
+                "layer": winning_layer.get(ATTR_LAYER_ID, "unknown")
+            })
         else:
             # Normal priority resolution
             normal_layers.sort(key=lambda x: x.get(ATTR_PRIORITY, 0), reverse=True)
@@ -150,7 +247,11 @@ class LightingCalculator:
                     })
             
             winning_layer = normal_layers[0]
-            calculation_path = [l.get(ATTR_LAYER_ID) for l in normal_layers]
+            calculation_path.append({
+                "step": "priority_winner",
+                "layer": winning_layer.get(ATTR_LAYER_ID, "unknown"),
+                "priority": winning_layer.get(ATTR_PRIORITY, 0)
+            })
         
         # Check if winning layer is locked
         if winning_layer.get(ATTR_LOCKED, False):
@@ -160,18 +261,67 @@ class LightingCalculator:
                 "note": "Layer modifications prevented"
             })
         
-        # Build final state from winning layer
-        final_state = self._build_final_state(winning_layer)
+        return winning_layer
+    
+    def _apply_modifier(self, state: dict[str, Any], modifier: dict[str, Any], 
+                       zone_config: dict[str, Any] = None) -> dict[str, Any]:
+        """Apply a single modifier to the current state.
         
-        return {
-            "winning_layer": winning_layer.get(ATTR_LAYER_ID, "unknown"),
-            "winning_layer_name": winning_layer.get(ATTR_LAYER_NAME, "Unknown"),
-            "final_state": final_state,
-            "conflicts": conflicts,
-            "calculation_path": calculation_path,
-            "total_active_layers": len(layers),
-            "forced_layer_active": len(forced_layers) > 0,
-        }
+        Args:
+            state: Current light state
+            modifier: Modifier layer to apply
+            zone_config: Optional zone configuration (e.g., k_control_enabled)
+            
+        Returns:
+            Modified state
+        """
+        result = state.copy()
+        zone_config = zone_config or {}
+        
+        # Brightness percentage delta (e.g., +15% for weather boost)
+        if ATTR_BRIGHTNESS_PCT_DELTA in modifier and "brightness" in result:
+            delta_pct = modifier[ATTR_BRIGHTNESS_PCT_DELTA]
+            current = result["brightness"]
+            # Apply percentage change
+            new_val = current * (1 + delta_pct / 100.0)
+            result["brightness"] = max(1, min(255, int(new_val)))
+        
+        # Brightness factor (multiplicative, e.g., 0.5 for 50% dimming)
+        if ATTR_BRIGHTNESS_FACTOR in modifier and "brightness" in result:
+            factor = modifier[ATTR_BRIGHTNESS_FACTOR]
+            current = result["brightness"]
+            result["brightness"] = max(1, min(255, int(current * factor)))
+        
+        # Color temperature delta in Kelvin
+        # Only apply if zone has k_control enabled (default True)
+        if zone_config.get("k_control_enabled", True):
+            if ATTR_COLOR_TEMP_KELVIN_DELTA in modifier and "color_temp" in result:
+                delta_k = modifier[ATTR_COLOR_TEMP_KELVIN_DELTA]
+                current_mireds = result["color_temp"]
+                
+                # Convert mireds to Kelvin, apply delta, convert back
+                current_kelvin = 1000000 / current_mireds
+                new_kelvin = current_kelvin + delta_k
+                new_kelvin = max(1000, min(10000, new_kelvin))  # Clamp to reasonable range
+                new_mireds = 1000000 / new_kelvin
+                
+                result["color_temp"] = max(153, min(500, int(new_mireds)))
+            
+            # Color temperature factor
+            if ATTR_COLOR_TEMP_FACTOR in modifier and "color_temp" in result:
+                factor = modifier[ATTR_COLOR_TEMP_FACTOR]
+                current_mireds = result["color_temp"]
+                current_kelvin = 1000000 / current_mireds
+                new_kelvin = current_kelvin * factor
+                new_kelvin = max(1000, min(10000, new_kelvin))
+                new_mireds = 1000000 / new_kelvin
+                result["color_temp"] = max(153, min(500, int(new_mireds)))
+        
+        # Override transition if specified in modifier
+        if ATTR_TRANSITION in modifier:
+            result["transition"] = modifier[ATTR_TRANSITION]
+        
+        return result
     
     def _build_final_state(self, layer: dict[str, Any]) -> dict[str, Any]:
         """Build the final light state from the winning layer.
@@ -278,51 +428,185 @@ def test_calculator():
     """Test the calculator in isolation (no HA required)."""
     calc = LightingCalculator()
     
-    # Test with multiple layers
-    layers = [
+    print("=" * 60)
+    print("TESTING MODIFIER LAYER FUNCTIONALITY")
+    print("=" * 60)
+    
+    # Test 1: Basic absolute layers (backwards compatibility)
+    print("\n1. Traditional Absolute Layers Test:")
+    print("-" * 40)
+    
+    absolute_layers = [
         {
-            ATTR_LAYER_ID: "morning",
-            ATTR_LAYER_NAME: "Morning",
-            ATTR_IS_ON: True,
-            ATTR_PRIORITY: 20,
-            ATTR_BRIGHTNESS: 180,
-            ATTR_COLOR_TEMP: 350,
-        },
-        {
-            ATTR_LAYER_ID: "motion",
-            ATTR_LAYER_NAME: "Motion",
+            ATTR_LAYER_ID: "manual",
+            ATTR_LAYER_NAME: "Manual",
+            ATTR_LAYER_TYPE: LAYER_TYPE_ABSOLUTE,
             ATTR_IS_ON: True,
             ATTR_PRIORITY: 50,
+            ATTR_BRIGHTNESS: 200,
+            ATTR_COLOR_TEMP: 370,
+        },
+        {
+            ATTR_LAYER_ID: "adaptive",
+            ATTR_LAYER_NAME: "Adaptive",
+            ATTR_LAYER_TYPE: LAYER_TYPE_ABSOLUTE,
+            ATTR_IS_ON: True,
+            ATTR_PRIORITY: 10,
+            ATTR_BRIGHTNESS: 150,
+            ATTR_COLOR_TEMP: 400,
+        },
+    ]
+    
+    result = calc.calculate_state(absolute_layers)
+    print(f"  Winner: {result['winning_layer_name']} (priority {50})")
+    print(f"  Final State: brightness={result['final_state']['brightness']}, color_temp={result['final_state']['color_temp']}")
+    print(f"  Applied Modifiers: {len(result.get('applied_modifiers', []))}")
+    
+    # Test 2: Absolute layer with modifier
+    print("\n2. Absolute Layer + Weather Boost Modifier:")
+    print("-" * 40)
+    
+    layers_with_modifier = [
+        {
+            ATTR_LAYER_ID: "adaptive",
+            ATTR_LAYER_NAME: "Adaptive",
+            ATTR_LAYER_TYPE: LAYER_TYPE_ABSOLUTE,
+            ATTR_IS_ON: True,
+            ATTR_PRIORITY: 10,
+            ATTR_BRIGHTNESS: 150,
+            ATTR_COLOR_TEMP: 400,  # ~2500K
+        },
+        {
+            ATTR_LAYER_ID: "weather_boost",
+            ATTR_LAYER_NAME: "Cloudy Weather Boost",
+            ATTR_LAYER_TYPE: LAYER_TYPE_MODIFIER,
+            ATTR_IS_ON: True,
+            ATTR_PRIORITY: 15,  # Higher than adaptive, so it applies
+            ATTR_BRIGHTNESS_PCT_DELTA: 20,  # +20% brightness
+            ATTR_COLOR_TEMP_KELVIN_DELTA: -500,  # Warmer by 500K
+        },
+    ]
+    
+    result = calc.calculate_state(layers_with_modifier)
+    print(f"  Winner: {result['winning_layer_name']}")
+    print(f"  Base State: brightness=150, color_temp=400")
+    print(f"  Final State: brightness={result['final_state']['brightness']}, color_temp={result['final_state']['color_temp']}")
+    print(f"  Applied Modifiers: {result.get('applied_modifiers', [])}")
+    
+    # Test 3: Multiple modifiers stacking
+    print("\n3. Multiple Modifiers Stacking Test:")
+    print("-" * 40)
+    
+    stacking_test = [
+        {
+            ATTR_LAYER_ID: "manual",
+            ATTR_LAYER_NAME: "Manual",
+            ATTR_LAYER_TYPE: LAYER_TYPE_ABSOLUTE,
+            ATTR_IS_ON: True,
+            ATTR_PRIORITY: 50,
+            ATTR_BRIGHTNESS: 200,
+            ATTR_COLOR_TEMP: 370,
+        },
+        {
+            ATTR_LAYER_ID: "weather_boost",
+            ATTR_LAYER_NAME: "Weather Boost",
+            ATTR_LAYER_TYPE: LAYER_TYPE_MODIFIER,
+            ATTR_IS_ON: True,
+            ATTR_PRIORITY: 60,  # Higher priority, will apply
+            ATTR_BRIGHTNESS_PCT_DELTA: 15,  # +15%
+        },
+        {
+            ATTR_LAYER_ID: "sunset_boost",
+            ATTR_LAYER_NAME: "Sunset Boost",
+            ATTR_LAYER_TYPE: LAYER_TYPE_MODIFIER,
+            ATTR_IS_ON: True,
+            ATTR_PRIORITY: 70,  # Even higher, will also apply
+            ATTR_BRIGHTNESS_PCT_DELTA: 25,  # +25%
+            ATTR_COLOR_TEMP_KELVIN_DELTA: -800,  # Much warmer
+        },
+        {
+            ATTR_LAYER_ID: "low_priority_mod",
+            ATTR_LAYER_NAME: "Low Priority Modifier",
+            ATTR_LAYER_TYPE: LAYER_TYPE_MODIFIER,
+            ATTR_IS_ON: True,
+            ATTR_PRIORITY: 30,  # Lower than manual, won't apply
+            ATTR_BRIGHTNESS_PCT_DELTA: 50,
+        },
+    ]
+    
+    result = calc.calculate_state(stacking_test)
+    print(f"  Winner: {result['winning_layer_name']}")
+    print(f"  Base State: brightness=200, color_temp=370")
+    print(f"  Final State: brightness={result['final_state']['brightness']}, color_temp={result['final_state']['color_temp']}")
+    print(f"  Applied Modifiers: {[m['name'] for m in result.get('applied_modifiers', [])]}")
+    print(f"  Calculation Path: {result['calculation_path']}")
+    
+    # Test 4: Zone config with k_control disabled
+    print("\n4. Zone Config Test (k_control_enabled=False):")
+    print("-" * 40)
+    
+    zone_config = {"k_control_enabled": False}
+    
+    k_control_test = [
+        {
+            ATTR_LAYER_ID: "manual",
+            ATTR_LAYER_NAME: "Manual",
+            ATTR_IS_ON: True,
+            ATTR_PRIORITY: 50,
+            ATTR_BRIGHTNESS: 200,
+            ATTR_COLOR_TEMP: 370,
+        },
+        {
+            ATTR_LAYER_ID: "color_modifier",
+            ATTR_LAYER_NAME: "Color Temperature Modifier",
+            ATTR_LAYER_TYPE: LAYER_TYPE_MODIFIER,
+            ATTR_IS_ON: True,
+            ATTR_PRIORITY: 60,
+            ATTR_COLOR_TEMP_KELVIN_DELTA: -1000,  # Should be ignored
+            ATTR_BRIGHTNESS_PCT_DELTA: 10,  # Should still apply
+        },
+    ]
+    
+    result = calc.calculate_state(k_control_test, zone_config)
+    print(f"  Zone Config: k_control_enabled=False")
+    print(f"  Base State: brightness=200, color_temp=370")
+    print(f"  Final State: brightness={result['final_state']['brightness']}, color_temp={result['final_state']['color_temp']}")
+    print(f"  Note: Color temp modifier ignored, brightness modifier applied")
+    
+    # Test 5: Forced modifier
+    print("\n5. Forced Modifier Test:")
+    print("-" * 40)
+    
+    forced_modifier_test = [
+        {
+            ATTR_LAYER_ID: "high_priority",
+            ATTR_LAYER_NAME: "High Priority Layer",
+            ATTR_IS_ON: True,
+            ATTR_PRIORITY: 90,
             ATTR_BRIGHTNESS: 255,
             ATTR_COLOR_TEMP: 300,
         },
         {
-            ATTR_LAYER_ID: "manual",
-            ATTR_LAYER_NAME: "Manual Override",
+            ATTR_LAYER_ID: "emergency_dim",
+            ATTR_LAYER_NAME: "Emergency Dim",
+            ATTR_LAYER_TYPE: LAYER_TYPE_MODIFIER,
             ATTR_IS_ON: True,
-            ATTR_PRIORITY: 30,
-            ATTR_FORCE: True,  # Force flag overrides priority
-            ATTR_BRIGHTNESS: 128,
+            ATTR_PRIORITY: 10,  # Very low priority
+            ATTR_FORCE: True,  # But forced!
+            ATTR_BRIGHTNESS_FACTOR: 0.1,  # Dim to 10%
         },
     ]
     
-    result = calc.calculate_state(layers)
+    result = calc.calculate_state(forced_modifier_test)
+    print(f"  Winner: {result['winning_layer_name']}")
+    print(f"  Base State: brightness=255")
+    print(f"  Final State: brightness={result['final_state']['brightness']} (10% of 255)")
+    print(f"  Note: Low priority modifier applied due to force flag")
     
-    print("Calculation Result:")
-    print(f"  Winner: {result['winning_layer_name']} ({result['winning_layer']})")
-    print(f"  Final State: {result['final_state']}")
-    print(f"  Conflicts: {result['conflicts']}")
-    print(f"  Path: {result['calculation_path']}")
-    print(f"  Time: {result['calculation_time_ms']:.2f}ms")
-    
-    # Test with empty layers
-    empty_result = calc.calculate_state([])
-    print(f"\nEmpty Result: {empty_result['final_state']}")
-    
-    # Test cache
-    result2 = calc.calculate_state(layers)
-    print(f"\nCache Hit: {result2['cache_hit']}")
-    print(f"Cache Stats: {calc.get_cache_stats()}")
+    # Performance test
+    print("\n6. Performance Test:")
+    print("-" * 40)
+    print(f"  Cache Stats: {calc.get_cache_stats()}")
 
 
 if __name__ == "__main__":

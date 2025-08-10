@@ -224,13 +224,17 @@ class ZoneStatusSensor(LightingManagerSensorBase):
         # Add conflict info if present
         conflicts = self.coordinator.data.get("conflicts", [])
         if conflicts:
+            # A conflict item is a dictionary, e.g. {'type': 'priority_tie', 'layers': ['id1', 'id2']}
+            # We need to extract the list of layer IDs from it.
+            # Assuming one conflict for simplicity, but can be extended for multiple.
+            conflict_item = conflicts[0]
+            conflicting_lids = conflict_item.get("layers", [])
+
             attrs["conflicting_layers"] = [
                 self.coordinator.layers.get(lid, {}).get("layer_name", lid)
-                for lid in conflicts
+                for lid in conflicting_lids
             ]
-            attrs["conflict_priority"] = self.coordinator.layers.get(
-                conflicts[0], {}
-            ).get("priority", 0)
+            attrs["conflict_priority"] = conflict_item.get("priority", 0)
         
         # Add timing info (for performance monitoring)
         if "last_calculation" in self.coordinator.data:
