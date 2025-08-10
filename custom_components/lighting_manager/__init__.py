@@ -37,22 +37,7 @@ from .validation import (
 
 _LOGGER = logging.getLogger(__name__)
 
-# Service schemas
-SERVICE_CREATE_LAYER_SCHEMA = vol.Schema({
-    vol.Required("layer_name"): cv.string,
-    vol.Optional("priority", default=50): vol.All(
-        vol.Coerce(int), vol.Range(min=0, max=100)
-    ),
-    vol.Optional("brightness"): vol.All(
-        vol.Coerce(int), vol.Range(min=0, max=255)
-    ),
-    vol.Optional("color_temp"): vol.All(
-        vol.Coerce(int), vol.Range(min=153, max=500)
-    ),
-    vol.Optional("transition", default=2.0): vol.All(
-        vol.Coerce(float), vol.Range(min=0.0, max=300.0)
-    ),
-})
+# Service schemas moved to services.py for consolidation
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -157,20 +142,8 @@ async def async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
 async def async_setup_services(hass: HomeAssistant) -> None:
     """Set up services for Lighting Manager.
     
-    Simple zone-based services.
+    This function is kept for compatibility but all service registration
+    is now handled by the consolidated services.py module.
     """
-    
-    async def handle_create_layer(call: ServiceCall) -> None:
-        """Create a new layer in a zone."""
-        from .services_create_layer import handle_create_layer as _handle
-        await _handle(hass, call)
-    
-    # Register service at domain level
-    hass.services.async_register(
-        DOMAIN,
-        "create_layer",
-        handle_create_layer,
-        schema=SERVICE_CREATE_LAYER_SCHEMA,
-    )
-    
-    _LOGGER.info("Registered Lighting Manager services")
+    # All services are now registered through services.py
+    pass

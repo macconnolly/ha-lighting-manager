@@ -187,6 +187,23 @@ SERVICE_PRESET_SCHEMA = vol.Schema({
     ),
 })
 
+SERVICE_CREATE_LAYER_SCHEMA = vol.Schema({
+    vol.Required("zone_id"): cv.string,
+    vol.Required("layer_name"): cv.string,
+    vol.Optional("priority", default=50): vol.All(
+        vol.Coerce(int), vol.Range(min=0, max=100)
+    ),
+    vol.Optional(ATTR_BRIGHTNESS): vol.All(
+        vol.Coerce(int), vol.Range(min=0, max=255)
+    ),
+    vol.Optional(ATTR_COLOR_TEMP): vol.All(
+        vol.Coerce(int), vol.Range(min=153, max=500)
+    ),
+    vol.Optional(ATTR_TRANSITION): vol.All(
+        vol.Coerce(float), vol.Range(min=0, max=300)
+    ),
+})
+
 
 async def async_setup_services(hass: HomeAssistant) -> None:
     """Register all Phase 3 services."""
@@ -197,8 +214,9 @@ async def async_setup_services(hass: HomeAssistant) -> None:
     
     # Register all services
     services = [
-        # Primary Layer Service
+        # Primary Layer Services
         (SERVICE_SET_LAYER, handle_set_layer, SERVICE_SET_LAYER_SCHEMA),
+        ("create_layer", handle_create_layer, SERVICE_CREATE_LAYER_SCHEMA),
         
         # Legacy Layer Control Services (kept for compatibility)
         (SERVICE_ACTIVATE_LAYER, handle_activate_layer, SERVICE_ACTIVATE_LAYER_SCHEMA),
@@ -312,6 +330,50 @@ async def _get_zone_coordinator(hass: HomeAssistant, zone_id: str):
 
 
 # Service Handlers
+
+async def handle_create_layer(hass: HomeAssistant, call: ServiceCall) -> None:
+    """Create a new layer in a zone.
+    
+    Simple zone-based implementation that takes:
+    - zone_id: The zone to create the layer in
+    - layer_name: Name for the new layer
+    - priority: Layer priority (optional)
+    - brightness/color_temp/transition: Initial settings (optional)
+    """
+    zone_id = call.data.get("zone_id")
+    layer_name = call.data.get("layer_name")
+    
+    if not zone_id:
+        raise ServiceValidationError("zone_id is required")
+    if not layer_name:
+        raise ServiceValidationError("layer_name is required")
+    
+    # Find the coordinator for this zone
+    coordinator = await _get_zone_coordinator(hass, zone_id)
+    
+    # Build layer attributes
+    attributes = {}
+    if "brightness" in call.data:
+        attributes[ATTR_BRIGHTNESS] = call.data["brightness"]
+    if "color_temp" in call.data:
+        attributes[ATTR_COLOR_TEMP] = call.data["color_temp"]
+    if "transition" in call.data:
+        attributes[ATTR_TRANSITION] = call.data["transition"]
+    
+    priority = call.data.get("priority", 50)
+    
+    # Create the layer
+    try:
+        layer_id = await coordinator.create_layer(
+            layer_name=layer_name,
+            priority=priority,
+            **attributes
+        )
+        _LOGGER.info("Created layer %s in zone %s", layer_id, zone_id)
+    except Exception as e:
+        _LOGGER.error("Failed to create layer in zone %s: %s", zone_id, e)
+        raise ServiceValidationError(f"Failed to create layer: {e}")
+
 
 async def handle_set_layer(hass: HomeAssistant, call: ServiceCall) -> ServiceResponse:
     """Create or update a layer with specified parameters (idempotent).
