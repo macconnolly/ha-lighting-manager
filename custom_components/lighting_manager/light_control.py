@@ -10,7 +10,6 @@ from typing import Any
 
 from homeassistant.components.light import (
     ATTR_BRIGHTNESS,
-    ATTR_COLOR_TEMP,
     ATTR_RGB_COLOR,
     ATTR_TRANSITION,
     DOMAIN as LIGHT_DOMAIN,
@@ -22,7 +21,7 @@ from homeassistant.core import HomeAssistant, State
 from homeassistant.helpers import entity_registry as er
 from homeassistant.util import dt as dt_util
 
-from .const import EVENT_STATE_APPLIED
+from .const import ATTR_COLOR_TEMP, EVENT_STATE_APPLIED
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -135,7 +134,7 @@ class LightController:
                     LIGHT_DOMAIN,
                     SERVICE_TURN_ON,
                     service_data,
-                    blocking=True,
+                    blocking=False,
                 )
                 success = True
                 
@@ -200,7 +199,7 @@ class LightController:
                 LIGHT_DOMAIN,
                 SERVICE_TURN_OFF,
                 service_data,
-                blocking=True,
+                blocking=False,
             )
             
             # Clear queued commands
@@ -277,7 +276,7 @@ class LightController:
         self, 
         entity_id: str, 
         final_state: dict[str, Any]
-    ) -> None:
+    ) -> bool:
         """Apply state with reduced features for limited lights.
         
         This handles lights that don't support all requested features.
@@ -309,8 +308,10 @@ class LightController:
                 blocking=False,
             )
             _LOGGER.debug("Applied reduced state to light %s", entity_id)
+            return True
         except Exception as e:
             _LOGGER.error("Failed to apply reduced state to %s: %s", entity_id, e)
+            return False
     
     async def apply_queued_states(self) -> None:
         """Apply any queued states to lights that have become available.

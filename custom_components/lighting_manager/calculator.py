@@ -83,13 +83,39 @@ class LightingCalculator:
         return result
     
     def _calculate(self, layers: list[dict[str, Any]]) -> dict[str, Any]:
-        """Perform the actual calculation logic."""
+        """Perform the actual calculation logic.
+        
+        Pure priority-based calculation:
+        - Only considers layers where is_on=True
+        - Applies priority rules to determine winner
+        - No condition evaluation (that's external)
+        """
         conflicts = []
         calculation_path = []
         
+        # Filter to only active layers (is_on=True)
+        # External automations handle all condition logic
+        active_layers = [
+            l for l in layers 
+            if l.get(ATTR_IS_ON, False)
+        ]
+        
+        if not active_layers:
+            calculation_path.append({
+                "step": "no_active_layers",
+                "result": "all_off"
+            })
+            return self._empty_result()
+        
+        calculation_path.append({
+            "step": "found_active_layers",
+            "count": len(active_layers),
+            "layers": [l.get(ATTR_LAYER_ID, "unknown") for l in active_layers]
+        })
+        
         # Separate forced and normal layers
-        forced_layers = [l for l in layers if l.get(ATTR_FORCE, False)]
-        normal_layers = [l for l in layers if not l.get(ATTR_FORCE, False)]
+        forced_layers = [l for l in active_layers if l.get(ATTR_FORCE, False)]
+        normal_layers = [l for l in active_layers if not l.get(ATTR_FORCE, False)]
         
         # Check for multiple force flags (conflict)
         if len(forced_layers) > 1:

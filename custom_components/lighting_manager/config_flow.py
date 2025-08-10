@@ -14,6 +14,13 @@ from homeassistant.helpers import selector
 from homeassistant.util import slugify
 
 from .const import (
+    CONF_ADAPTIVE_BRIGHTNESS_MAX,
+    CONF_ADAPTIVE_BRIGHTNESS_MIN,
+    CONF_ADAPTIVE_COLOR_TEMP_MAX,
+    CONF_ADAPTIVE_COLOR_TEMP_MIN,
+    CONF_ADAPTIVE_ELEVATION_MAX,
+    CONF_ADAPTIVE_ELEVATION_MIN,
+    CONF_ADAPTIVE_ENABLED,
     DEFAULT_BRIGHTNESS_MAX,
     DEFAULT_BRIGHTNESS_MIN,
     DEFAULT_COLOR_TEMP_MAX,
@@ -73,9 +80,13 @@ class LightingManagerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     options={
                         "light_entities": light_entities,  # User-configurable
                         "default_transition": DEFAULT_TRANSITION,
-                        "adaptive_enabled": False,
-                        "adaptive_brightness_range": [DEFAULT_BRIGHTNESS_MIN, DEFAULT_BRIGHTNESS_MAX],
-                        "adaptive_color_temp_range": [DEFAULT_COLOR_TEMP_MIN, DEFAULT_COLOR_TEMP_MAX],
+                        CONF_ADAPTIVE_ENABLED: False,
+                        CONF_ADAPTIVE_BRIGHTNESS_MIN: 10,
+                        CONF_ADAPTIVE_BRIGHTNESS_MAX: 255,
+                        CONF_ADAPTIVE_COLOR_TEMP_MIN: 153,  # Mireds (warm)
+                        CONF_ADAPTIVE_COLOR_TEMP_MAX: 500,  # Mireds (cool)
+                        CONF_ADAPTIVE_ELEVATION_MIN: -6,
+                        CONF_ADAPTIVE_ELEVATION_MAX: 15,
                     },
                 )
 
@@ -113,6 +124,7 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
 
     def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
         """Initialize options flow."""
+        super().__init__()
         self.config_entry = config_entry
 
     async def async_step_init(
@@ -120,33 +132,24 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
     ) -> FlowResult:
         """Manage the options."""
         if user_input is not None:
-            # GOLDEN PATH FIX: Properly reconstruct ranges as arrays
+            # Store adaptive settings as individual values
             options_data = {
                 "light_entities": user_input["light_entities"],
                 "default_transition": user_input["default_transition"],
-                "adaptive_enabled": user_input["adaptive_enabled"],
-                "adaptive_brightness_range": [
-                    user_input["adaptive_brightness_min"],
-                    user_input["adaptive_brightness_max"]
-                ],
-                "adaptive_color_temp_range": [
-                    user_input["adaptive_color_temp_min"],
-                    user_input["adaptive_color_temp_max"]
-                ]
+                CONF_ADAPTIVE_ENABLED: user_input[CONF_ADAPTIVE_ENABLED],
+                CONF_ADAPTIVE_BRIGHTNESS_MIN: user_input[CONF_ADAPTIVE_BRIGHTNESS_MIN],
+                CONF_ADAPTIVE_BRIGHTNESS_MAX: user_input[CONF_ADAPTIVE_BRIGHTNESS_MAX],
+                CONF_ADAPTIVE_COLOR_TEMP_MIN: user_input[CONF_ADAPTIVE_COLOR_TEMP_MIN],
+                CONF_ADAPTIVE_COLOR_TEMP_MAX: user_input[CONF_ADAPTIVE_COLOR_TEMP_MAX],
+                CONF_ADAPTIVE_ELEVATION_MIN: user_input[CONF_ADAPTIVE_ELEVATION_MIN],
+                CONF_ADAPTIVE_ELEVATION_MAX: user_input[CONF_ADAPTIVE_ELEVATION_MAX],
             }
+            _LOGGER.info("Saving options for zone %s: light_entities=%s", 
+                        self.config_entry.data.get("zone_name"), 
+                        user_input["light_entities"])
             return self.async_create_entry(title="", data=options_data)
 
         options = self.config_entry.options
-        
-        # Extract min/max from ranges for display
-        brightness_range = options.get(
-            "adaptive_brightness_range", 
-            [DEFAULT_BRIGHTNESS_MIN, DEFAULT_BRIGHTNESS_MAX]
-        )
-        color_temp_range = options.get(
-            "adaptive_color_temp_range",
-            [DEFAULT_COLOR_TEMP_MIN, DEFAULT_COLOR_TEMP_MAX]
-        )
         
         return self.async_show_form(
             step_id="init",
@@ -166,25 +169,33 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
                         default=options.get("default_transition", DEFAULT_TRANSITION),
                     ): vol.All(vol.Coerce(float), vol.Range(min=0.0, max=300.0)),
                     vol.Optional(
-                        "adaptive_enabled",
-                        default=options.get("adaptive_enabled", False),
+                        CONF_ADAPTIVE_ENABLED,
+                        default=options.get(CONF_ADAPTIVE_ENABLED, False),
                     ): bool,
                     vol.Optional(
-                        "adaptive_brightness_min",
-                        default=brightness_range[0],
-                    ): vol.All(vol.Coerce(int), vol.Range(min=0, max=100)),
+                        CONF_ADAPTIVE_BRIGHTNESS_MIN,
+                        default=options.get(CONF_ADAPTIVE_BRIGHTNESS_MIN, 10),
+                    ): vol.All(vol.Coerce(int), vol.Range(min=1, max=255)),
                     vol.Optional(
-                        "adaptive_brightness_max",
-                        default=brightness_range[1],
-                    ): vol.All(vol.Coerce(int), vol.Range(min=0, max=100)),
+                        CONF_ADAPTIVE_BRIGHTNESS_MAX,
+                        default=options.get(CONF_ADAPTIVE_BRIGHTNESS_MAX, 255),
+                    ): vol.All(vol.Coerce(int), vol.Range(min=1, max=255)),
                     vol.Optional(
-                        "adaptive_color_temp_min",
-                        default=color_temp_range[0],
-                    ): vol.All(vol.Coerce(int), vol.Range(min=1000, max=10000)),
+                        CONF_ADAPTIVE_COLOR_TEMP_MIN,
+                        default=options.get(CONF_ADAPTIVE_COLOR_TEMP_MIN, 153),
+                    ): vol.All(vol.Coerce(int), vol.Range(min=153, max=500)),
                     vol.Optional(
-                        "adaptive_color_temp_max",
-                        default=color_temp_range[1],
-                    ): vol.All(vol.Coerce(int), vol.Range(min=1000, max=10000)),
+                        CONF_ADAPTIVE_COLOR_TEMP_MAX,
+                        default=options.get(CONF_ADAPTIVE_COLOR_TEMP_MAX, 500),
+                    ): vol.All(vol.Coerce(int), vol.Range(min=153, max=500)),
+                    vol.Optional(
+                        CONF_ADAPTIVE_ELEVATION_MIN,
+                        default=options.get(CONF_ADAPTIVE_ELEVATION_MIN, -6),
+                    ): vol.All(vol.Coerce(int), vol.Range(min=-90, max=90)),
+                    vol.Optional(
+                        CONF_ADAPTIVE_ELEVATION_MAX,
+                        default=options.get(CONF_ADAPTIVE_ELEVATION_MAX, 15),
+                    ): vol.All(vol.Coerce(int), vol.Range(min=-90, max=90)),
                 }
             ),
         )

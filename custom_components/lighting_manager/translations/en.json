@@ -31,11 +31,22 @@
         "data": {
           "light_entities": "Lights",
           "default_transition": "Default Transition Time (seconds)",
-          "adaptive_enabled": "Enable Built-in Adaptive Lighting",
-          "adaptive_brightness_min": "Minimum Brightness (%)",
-          "adaptive_brightness_max": "Maximum Brightness (%)",
-          "adaptive_color_temp_min": "Minimum Color Temperature (K)",
-          "adaptive_color_temp_max": "Maximum Color Temperature (K)"
+          "adaptive_enabled": "Enable Adaptive Lighting",
+          "adaptive_brightness_min": "Minimum Brightness (night)",
+          "adaptive_brightness_max": "Maximum Brightness (day)",
+          "adaptive_color_temp_min": "Warmest Color Temperature (mireds)",
+          "adaptive_color_temp_max": "Coolest Color Temperature (mireds)",
+          "adaptive_elevation_min": "Sun Elevation for Night Mode (degrees)",
+          "adaptive_elevation_max": "Sun Elevation for Day Mode (degrees)"
+        },
+        "data_description": {
+          "adaptive_enabled": "Automatically adjust lights based on sun position",
+          "adaptive_brightness_min": "Brightness when sun is below night threshold (1-255)",
+          "adaptive_brightness_max": "Brightness when sun is above day threshold (1-255)",
+          "adaptive_color_temp_min": "Color temperature at night in mireds (153=warm, 500=cool)",
+          "adaptive_color_temp_max": "Color temperature during day in mireds",
+          "adaptive_elevation_min": "Sun elevation below this = night mode (typically -6)",
+          "adaptive_elevation_max": "Sun elevation above this = day mode (typically 15)"
         }
       }
     }

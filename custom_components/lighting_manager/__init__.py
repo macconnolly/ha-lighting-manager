@@ -157,91 +157,13 @@ async def async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
 async def async_setup_services(hass: HomeAssistant) -> None:
     """Set up services for Lighting Manager.
     
-    GOLDEN PATH: Uses proper entity targeting with entity registry.
+    Simple zone-based services.
     """
     
     async def handle_create_layer(call: ServiceCall) -> None:
-        """GOLDEN PATH: Proper service implementation using entity registry."""
-        # Extract entities properly
-        referenced = async_extract_referenced_entity_ids(hass, call)
-        entity_ids = referenced.referenced | referenced.indirectly_referenced
-        
-        if not entity_ids:
-            _LOGGER.error("No target entities specified for create_layer")
-            return
-        
-        # Use entity registry to find our switch entities
-        entity_reg = er.async_get(hass)
-        coordinators_to_update = set()
-        
-        for entity_id in entity_ids:
-            entry = entity_reg.async_get(entity_id)
-            
-            # Check if this is one of our layer switches
-            if entry and entry.platform == DOMAIN and "layer" in entity_id:
-                # Get coordinator from the config entry
-                config_entry_id = entry.config_entry_id
-                if config_entry_id not in hass.data[DOMAIN]:
-                    continue
-                    
-                coordinator = hass.data[DOMAIN][config_entry_id].get(DATA_COORDINATOR)
-                if not coordinator:
-                    continue
-                
-                # Validate ALL inputs before calling coordinator
-                try:
-                    layer_name = validate_layer_name(call.data["layer_name"])
-                    priority = validate_priority(call.data.get("priority", 50))
-                    
-                    # Build attributes dict with validated values
-                    attributes = {}
-                    if "brightness" in call.data:
-                        attributes[ATTR_BRIGHTNESS] = validate_brightness(call.data["brightness"])
-                    if "color_temp" in call.data:
-                        attributes[ATTR_COLOR_TEMP] = validate_color_temp(call.data["color_temp"])
-                    if "transition" in call.data:
-                        attributes[ATTR_TRANSITION] = validate_transition(call.data["transition"])
-                    
-                    # Create layer in coordinator
-                    layer_id = await coordinator.create_layer(
-                        layer_name=call.data["layer_name"],  # Original name for display
-                        priority=priority,
-                        **attributes
-                    )
-                    
-                    # Create switch entity for the new layer
-                    add_entities = hass.data[DOMAIN][config_entry_id].get(DATA_ADD_ENTITIES)
-                    if add_entities and layer_id:
-                        from .switch import LayerSwitch
-                        
-                        new_switch = LayerSwitch(
-                            coordinator=coordinator,
-                            layer_id=layer_id,
-                            layer_name=call.data["layer_name"],
-                        )
-                        add_entities([new_switch])
-                        
-                        # Fire event
-                        hass.bus.async_fire(
-                            EVENT_LAYER_CREATED,
-                            {
-                                "zone_id": coordinator.zone_id,
-                                "layer_id": layer_id,
-                                "layer_name": call.data["layer_name"],
-                            },
-                        )
-                        
-                        _LOGGER.info("Created layer %s in zone %s",
-                                    layer_name, coordinator.zone_id)
-                    
-                    coordinators_to_update.add(coordinator)
-                    
-                except ValueError as e:
-                    _LOGGER.error("Invalid input for create_layer: %s", e)
-                    continue
-                
-                # Only process first matching entity
-                break
+        """Create a new layer in a zone."""
+        from .services_create_layer import handle_create_layer as _handle
+        await _handle(hass, call)
     
     # Register service at domain level
     hass.services.async_register(

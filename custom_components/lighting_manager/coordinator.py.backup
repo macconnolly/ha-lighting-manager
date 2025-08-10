@@ -88,9 +88,6 @@ class ZoneCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.zone_name = entry.data["zone_name"]
         self.light_entities = entry.options.get("light_entities", [])
         
-        _LOGGER.info("Coordinator init for zone %s with lights: %s", 
-                    self.zone_name, self.light_entities)
-        
         # CRITICAL: All layer state lives here - switches are just views
         self.layers: dict[str, dict[str, Any]] = {}
         
@@ -107,33 +104,18 @@ class ZoneCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         
         # Calculator and light controller
         self._calculator = LightingCalculator()
-        self._light_controller = LightController(hass, self.zone_id, self.light_entities)
+        self._light_controller = LightController(hass, zone_id, self.light_entities)
         
         # Cached calculation result
         self._last_calculation: dict[str, Any] | None = None
-        self._last_final_state: dict[str, Any] | None = None  # Track last applied state
         
         # Adaptive lighting tracking
         self._adaptive_enabled = False
         self._adaptive_factor = 0.5
         self._adaptive_listener = None
         
-        # Callback for dynamically adding switch entities
-        self.new_layer_callback = None
-        
-        # Initialize data with proper structure to avoid race conditions
-        self.data = {
-            "layers": {},
-            "active_layers": [],
-            "active_layers_full": [],
-            "zone_id": self.zone_id,
-            "last_updated": None,
-            "winning_layer": None,
-            "final_state": {"power": "off"},
-            "conflicts": [],
-            "calculation_path": [],
-            "calculating": False,
-        }
+        # Initialize data for parent class
+        self.data = {}
         
         _LOGGER.info("Coordinator initialized for zone %s", self.zone_id)
 
@@ -157,15 +139,8 @@ class ZoneCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if layer.get(ATTR_IS_ON, False)
         ]
         
-        # Build a read-only view of layers for consumers
-        # This is much faster than deepcopy and still prevents mutation
-        layers_view = {
-            lid: {**layer}  # Shallow copy of each layer
-            for lid, layer in self.layers.items()
-        }
-        
         return {
-            "layers": layers_view,  # Read-only view, much faster than deepcopy
+            "layers": copy.deepcopy(self.layers),  # Safe copy to prevent external mutation
             "active_layers": active_layer_ids,  # Just IDs for sensors
             "active_layers_full": [  # Full data for existing consumers
                 {**layer, "layer_id": lid}
@@ -202,17 +177,6 @@ class ZoneCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         except Exception as err:
             _LOGGER.error("Failed to load layers for zone %s: %s", self.zone_id, err)
             self.layers = {}
-        
-        # Create default layer if no layers exist
-        if not self.layers:
-            await self.create_layer(
-                layer_name="Manual",
-                priority=50,
-                brightness=255,
-                color_temp=370,
-                transition=2.0
-            )
-            _LOGGER.info("Created default 'Manual' layer for zone %s", self.zone_id)
         
         # Set up adaptive lighting if enabled
         await self._setup_adaptive()
@@ -301,10 +265,6 @@ class ZoneCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.schedule_save()
         self.schedule_recalculation()  # Phase 2: Triggers calculation + light update
         
-        # Notify switch platform to create entity for new layer
-        if self.new_layer_callback and layer_id != LAYER_BASE_ADAPTIVE:
-            await self.new_layer_callback(layer_id, layer_name)
-        
         _LOGGER.info("Created layer %s in zone %s with priority %d",
                     layer_id, self.zone_id, priority)
         return layer_id
@@ -388,121 +348,112 @@ class ZoneCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             
             # Calculate winning state
             if all_layers:
-                calc_result = self._calculator.calculate_state(all_layers)
-            else:
-                calc_result = {
-                    "winning_layer": None,
-                    "final_state": {"power": "off"},
-                    "conflicts": [],
-                    "calculation_path": [],
-                    "total_active_layers": 0,
+            calc_result = self._calculator.calculate_state(all_layers)
+        else:
+            calc_result = {
+                "winning_layer": None,
+                "final_state": {"power": "off"},
+                "conflicts": [],
+                "calculation_path": [],
+                "total_active_layers": 0,
+            }
+        
+        # Add timing and metadata for Phase 4 sensors
+        calc_time_ms = (dt_util.now() - start_time).total_seconds() * 1000
+        calc_result["timestamp"] = start_time.isoformat()
+        calc_result["calculation_time_ms"] = calc_time_ms
+        calc_result["trigger"] = "layer_update"  # Will be overridden by specific triggers
+        calc_result["cache_hit"] = False  # Would be set by calculator if caching implemented
+        
+        # Store calculation result
+        self._last_calculation = calc_result
+        
+        # Fire conflict event if conflicts detected
+        conflicts = calc_result.get("conflicts", [])
+        if conflicts:
+            # Determine resolution reason
+            winning_layer = calc_result.get("winning_layer")
+            resolution_reason = "no_winner"
+            
+            if winning_layer:
+                # Find the winning layer data
+                winning_data = next(
+                    (l for l in all_layers if l["layer_id"] == winning_layer),
+                    None
+                )
+                if winning_data:
+                    if winning_data.get(ATTR_FORCE):
+                        resolution_reason = "force_flag_override"
+                    elif winning_data.get(ATTR_LOCKED):
+                        resolution_reason = "locked_layer"
+                    else:
+                        resolution_reason = f"highest_priority_{winning_data.get(ATTR_PRIORITY, 0)}"
+            
+            # Determine conflict severity
+            severity = "info"
+            if "multiple_force_flags" in conflicts:
+                severity = "warning"
+            elif "all_layers_locked" in conflicts:
+                severity = "error"
+            
+            self.hass.bus.async_fire(
+                EVENT_CONFLICT_DETECTED,
+                {
+                    "zone_id": self.zone_id,
+                    "conflicts": conflicts,
+                    "severity": severity,
+                    "resolution": winning_layer,
+                    "resolution_reason": resolution_reason,
+                    "affected_layers": [
+                        {
+                            "layer_id": l["layer_id"],
+                            "priority": l.get(ATTR_PRIORITY, 0),
+                            "force": l.get(ATTR_FORCE, False),
+                            "locked": l.get(ATTR_LOCKED, False),
+                        }
+                        for l in all_layers
+                        if l.get(ATTR_IS_ON, False)  # Only include active layers in conflict report
+                    ],
+                    "timestamp": dt_util.now().isoformat(),
                 }
-            
-            # Add timing and metadata for Phase 4 sensors
-            calc_time_ms = (dt_util.now() - start_time).total_seconds() * 1000
-            calc_result["timestamp"] = start_time.isoformat()
-            calc_result["calculation_time_ms"] = calc_time_ms
-            calc_result["trigger"] = "layer_update"  # Will be overridden by specific triggers
-            calc_result["cache_hit"] = False  # Would be set by calculator if caching implemented
-            
-            # Store calculation result
-            self._last_calculation = calc_result
-            
-            # Fire conflict event if conflicts detected
-            conflicts = calc_result.get("conflicts", [])
-            if conflicts:
-                # Determine resolution reason
-                winning_layer = calc_result.get("winning_layer")
-                resolution_reason = "no_winner"
-                
-                if winning_layer:
-                    # Find the winning layer data
-                    winning_data = next(
-                        (l for l in all_layers if l["layer_id"] == winning_layer),
-                        None
-                    )
-                    if winning_data:
-                        if winning_data.get(ATTR_FORCE):
-                            resolution_reason = "force_flag_override"
-                        elif winning_data.get(ATTR_LOCKED):
-                            resolution_reason = "locked_layer"
-                        else:
-                            resolution_reason = f"highest_priority_{winning_data.get(ATTR_PRIORITY, 0)}"
-                
-                # Determine conflict severity
-                severity = "info"
-                if "multiple_force_flags" in conflicts:
-                    severity = "warning"
-                elif "all_layers_locked" in conflicts:
-                    severity = "error"
-                
-                self.hass.bus.async_fire(
-                    EVENT_CONFLICT_DETECTED,
-                    {
-                        "zone_id": self.zone_id,
-                        "conflicts": conflicts,
-                        "severity": severity,
-                        "resolution": winning_layer,
-                        "resolution_reason": resolution_reason,
-                        "affected_layers": [
-                            {
-                                "layer_id": l["layer_id"],
-                                "priority": l.get(ATTR_PRIORITY, 0),
-                                "force": l.get(ATTR_FORCE, False),
-                                "locked": l.get(ATTR_LOCKED, False),
-                            }
-                            for l in all_layers
-                            if l.get(ATTR_IS_ON, False)  # Only include active layers in conflict report
-                        ],
-                        "timestamp": dt_util.now().isoformat(),
-                    }
-                )
-                
-                _LOGGER.info(
-                    "Conflict detected in zone %s: %s, resolved with %s (%s)",
-                    self.zone_id,
-                    conflicts,
-                    winning_layer,
-                    resolution_reason
-                )
-            
-            # Check if state actually changed
-            state_changed = (self._last_final_state != calc_result["final_state"])
-            
-            # Only apply to lights if state changed
-            if state_changed:
-                application_result = await self._light_controller.apply_state(calc_result["final_state"])
-            else:
-                application_result = True  # Skip redundant update
-                _LOGGER.debug("Skipping light update for zone %s - state unchanged", self.zone_id)
-            
-            # Track unavailable lights from the light controller
-            if hasattr(self._light_controller, '_unavailable_lights'):
-                calc_result["lights_unavailable"] = list(self._light_controller._unavailable_lights)
-            else:
-                calc_result["lights_unavailable"] = []
-            
-            # Only fire event if state actually changed
-            if state_changed:
-                self._last_final_state = calc_result["final_state"].copy()
-                self.hass.bus.async_fire(
-                    EVENT_CALCULATION_COMPLETE,
-                    {
-                        "zone_id": self.zone_id,
-                        "winning_layer": calc_result.get("winning_layer"),
-                        "final_state": calc_result.get("final_state"),
-                        "conflicts": calc_result.get("conflicts"),
-                        "calculation_time_ms": calc_result.get("calculation_time_ms", 0),
-                    }
-                )
-            
-            _LOGGER.debug(
-                "Calculation complete for zone %s: winner=%s, time=%.2fms",
-                self.zone_id,
-                calc_result.get("winning_layer"),
-                calc_result.get("calculation_time_ms", 0)
             )
             
+            _LOGGER.info(
+                "Conflict detected in zone %s: %s, resolved with %s (%s)",
+                self.zone_id,
+                conflicts,
+                winning_layer,
+                resolution_reason
+            )
+        
+        # Apply to lights and capture application result
+        application_result = await self._light_controller.apply_state(calc_result["final_state"])
+        
+        # Track unavailable lights from the light controller
+        if hasattr(self._light_controller, '_unavailable_lights'):
+            calc_result["lights_unavailable"] = list(self._light_controller._unavailable_lights)
+        else:
+            calc_result["lights_unavailable"] = []
+        
+        # Fire calculation complete event
+        self.hass.bus.async_fire(
+            EVENT_CALCULATION_COMPLETE,
+            {
+                "zone_id": self.zone_id,
+                "winning_layer": calc_result.get("winning_layer"),
+                "final_state": calc_result.get("final_state"),
+                "conflicts": calc_result.get("conflicts"),
+                "calculation_time_ms": calc_result.get("calculation_time_ms", 0),
+            }
+        )
+        
+        _LOGGER.debug(
+            "Calculation complete for zone %s: winner=%s, time=%.2fms",
+            self.zone_id,
+            calc_result.get("winning_layer"),
+            calc_result.get("calculation_time_ms", 0)
+        )
+        
             # Update and return the data
             self.data = self._get_current_data()
             return self.data
@@ -557,8 +508,16 @@ class ZoneCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # Track adaptive factor sensor
         sensor_id = f"sensor.{self.zone_id}_adaptive_factor"
         
-        # Don't wait for sensor - it will be created by the sensor platform
-        # We'll start tracking it when it becomes available
+        # Try to get sensor with retries
+        for attempt in range(10):  # Try for up to 5 seconds
+            sensor_state = self.hass.states.get(sensor_id)
+            if sensor_state and sensor_state.state not in (STATE_UNAVAILABLE, STATE_UNKNOWN):
+                _LOGGER.debug("Adaptive sensor %s ready after %d attempts", sensor_id, attempt + 1)
+                break
+            if attempt < 9:  # Don't sleep on last attempt
+                await asyncio.sleep(0.5)
+            else:
+                _LOGGER.warning("Adaptive sensor %s not ready after 5 seconds", sensor_id)
         
         @callback
         def on_adaptive_change(event):
@@ -647,7 +606,7 @@ class ZoneCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         
         # Save and trigger update
         await self.save_layers()
-        self.schedule_recalculation()
+        await self._trigger_update()
     
     async def async_shutdown(self) -> None:
         """Clean up when coordinator is being removed."""
@@ -656,16 +615,11 @@ class ZoneCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self._adaptive_listener()
             self._adaptive_listener = None
         
-        # Cancel timers safely
-        if self._debounce_timer and not self._debounce_timer.cancelled():
+        # Cancel timers
+        if self._debounce_timer:
             self._debounce_timer.cancel()
-            self._debounce_timer = None
-        if self._save_timer and not self._save_timer.cancelled():
+        if self._save_timer:
             self._save_timer.cancel()
-            self._save_timer = None
         
         # Final save
-        try:
-            await self.save_layers()
-        except Exception as e:
-            _LOGGER.error("Error during final save for zone %s: %s", self.zone_id, e)
+        await self.save_layers()

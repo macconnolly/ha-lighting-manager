@@ -39,6 +39,21 @@ ATTR_CREATED_AT: Final = "created_at"
 ATTR_LAST_MODIFIED: Final = "last_modified"
 ATTR_IS_ON: Final = "is_on"
 
+# Adaptive Lighting
+ATTR_ADAPTIVE_FACTOR: Final = "adaptive_factor"
+ATTR_ADAPTIVE_SOURCE: Final = "adaptive_source"
+CONF_ADAPTIVE_ENABLED: Final = "adaptive_enabled"
+CONF_ADAPTIVE_BRIGHTNESS_MIN: Final = "adaptive_brightness_min"
+CONF_ADAPTIVE_BRIGHTNESS_MAX: Final = "adaptive_brightness_max"
+CONF_ADAPTIVE_COLOR_TEMP_MIN: Final = "adaptive_color_temp_min"
+CONF_ADAPTIVE_COLOR_TEMP_MAX: Final = "adaptive_color_temp_max"
+CONF_ADAPTIVE_ELEVATION_MIN: Final = "adaptive_elevation_min"
+CONF_ADAPTIVE_ELEVATION_MAX: Final = "adaptive_elevation_max"
+CONF_ADAPTIVE_BRIGHTNESS_ENTITY: Final = "adaptive_brightness_entity"
+
+# Special Layer IDs
+LAYER_BASE_ADAPTIVE: Final = "base_adaptive"
+
 # Events
 EVENT_LAYER_ACTIVATED: Final = f"{DOMAIN}.layer_activated"
 EVENT_LAYER_DEACTIVATED: Final = f"{DOMAIN}.layer_deactivated"

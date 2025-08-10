@@ -14,6 +14,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import DeviceInfo, EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
+from homeassistant.util import slugify
 
 from .const import (
     ATTR_BRIGHTNESS,
@@ -73,7 +74,21 @@ async def async_setup_entry(
         async_add_entities(switches)
         _LOGGER.info("Created %d layer switches for zone %s", len(switches), zone_id)
     else:
-        _LOGGER.info("No existing layers for zone %s", zone_id)
+        _LOGGER.info("No existing layers for zone %s - waiting for layer creation", zone_id)
+    
+    # Set up listener for new layers
+    async def handle_new_layer(layer_id: str, layer_name: str) -> None:
+        """Handle creation of new layer by adding switch entity."""
+        _LOGGER.info("Creating switch for new layer %s in zone %s", layer_id, zone_id)
+        switch = LayerSwitch(
+            coordinator=coordinator,
+            layer_id=layer_id,
+            layer_name=layer_name,
+        )
+        async_add_entities([switch])
+    
+    # Store callback for coordinator to use
+    coordinator.new_layer_callback = handle_new_layer
 
 
 class LayerSwitch(CoordinatorEntity[ZoneCoordinator], SwitchEntity):
@@ -86,7 +101,7 @@ class LayerSwitch(CoordinatorEntity[ZoneCoordinator], SwitchEntity):
     """
 
     _attr_has_entity_name = True
-    _attr_entity_category = EntityCategory.CONFIG
+    # Don't use entity_category so switches appear in main UI
 
     def __init__(
         self,
@@ -105,15 +120,10 @@ class LayerSwitch(CoordinatorEntity[ZoneCoordinator], SwitchEntity):
         self.layer_name = layer_name  # For display only
         
         # Set unique ID for entity registry
-        self._attr_unique_id = f"{coordinator.zone_id}_{layer_id}_layer"
+        self._attr_unique_id = f"{slugify(coordinator.zone_id)}_{slugify(layer_id)}_layer"
         
         _LOGGER.debug("Initialized layer switch %s for zone %s", 
                      layer_id, coordinator.zone_id)
-
-    @property
-    def entity_id(self) -> str:
-        """Return the entity ID."""
-        return f"switch.{self.coordinator.zone_id}_{self.layer_id}_layer"
 
     @property
     def name(self) -> str:

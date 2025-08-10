@@ -4,11 +4,14 @@
 create_layer:
   name: Create Layer
   description: Create a new layer for a zone
-  target:
-    entity:
-      integration: lighting_manager
-      domain: switch
   fields:
+    zone_id:
+      name: Zone ID
+      description: The zone to create the layer in
+      required: true
+      example: "living_room"
+      selector:
+        text:
     layer_name:
       name: Layer Name
       description: Name for the new layer

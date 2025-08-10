@@ -155,16 +155,10 @@ async def async_setup_services(hass: HomeAssistant) -> None:
     ]
     
     for service_name, handler, schema in services:
-        # Create a closure that captures hass and handler correctly
-        def create_handler(h, handler_func):
-            async def service_handler(call: ServiceCall) -> ServiceResponse:
-                return await handler_func(h, call)
-            return service_handler
-        
         hass.services.async_register(
             DOMAIN,
             service_name,
-            create_handler(hass, handler),
+            handler,
             schema=schema,
             supports_response=SupportsResponse.OPTIONAL,
         )
@@ -315,8 +309,9 @@ async def handle_activate_layer(hass: HomeAssistant, call: ServiceCall) -> Servi
     )
 
 
-async def handle_deactivate_layer(hass: HomeAssistant, call: ServiceCall) -> ServiceResponse:
+async def handle_deactivate_layer(call: ServiceCall) -> ServiceResponse:
     """Deactivate specified layers."""
+    hass = call.context.hass
     
     try:
         switches = await _get_switch_entities(hass, call)
@@ -372,8 +367,9 @@ async def handle_deactivate_layer(hass: HomeAssistant, call: ServiceCall) -> Ser
     )
 
 
-async def handle_update_layer(hass: HomeAssistant, call: ServiceCall) -> ServiceResponse:
+async def handle_update_layer(call: ServiceCall) -> ServiceResponse:
     """Update layer attributes without changing on/off state."""
+    hass = call.context.hass
     
     try:
         switches = await _get_switch_entities(hass, call)
@@ -432,8 +428,9 @@ async def handle_update_layer(hass: HomeAssistant, call: ServiceCall) -> Service
     )
 
 
-async def handle_set_layer_priority(hass: HomeAssistant, call: ServiceCall) -> ServiceResponse:
+async def handle_set_layer_priority(call: ServiceCall) -> ServiceResponse:
     """Set priority for specified layers."""
+    hass = call.context.hass
     
     try:
         switches = await _get_switch_entities(hass, call)
@@ -474,133 +471,56 @@ async def handle_set_layer_priority(hass: HomeAssistant, call: ServiceCall) -> S
     )
 
 
-async def handle_lock_layer(hass: HomeAssistant, call: ServiceCall) -> ServiceResponse:
+async def handle_lock_layer(call: ServiceCall) -> ServiceResponse:
     """Lock layers to prevent modifications."""
+    from .services_phase3 import handle_lock_layer as _handle_lock
+    
+    hass = call.context.hass
     try:
         switches = await _get_switch_entities(hass, call)
     except ServiceValidationError as e:
         return ServiceResponse(iserr=True, data={"error": str(e)})
     
-    results = []
-    for switch in switches:
-        try:
-            success = await switch.coordinator.update_layer(
-                switch.layer_id,
-                **{ATTR_LOCKED: True}
-            )
-            if success:
-                hass.bus.async_fire(
-                    EVENT_LAYER_LOCKED,
-                    {
-                        "zone_id": switch.coordinator.zone_id,
-                        "layer_id": switch.layer_id,
-                        "timestamp": dt_util.now().isoformat(),
-                    }
-                )
-            results.append({
-                "entity_id": switch.entity_id,
-                "success": success,
-                "layer_id": switch.layer_id,
-            })
-        except Exception as e:
-            _LOGGER.error("Failed to lock layer %s: %s", switch.entity_id, e)
-            results.append({
-                "entity_id": switch.entity_id,
-                "success": False,
-                "error": str(e),
-            })
-    
-    return ServiceResponse(iserr=False, data={"results": results})
+    return await _handle_lock(hass, call, switches)
 
 
-async def handle_unlock_layer(hass: HomeAssistant, call: ServiceCall) -> ServiceResponse:
+async def handle_unlock_layer(call: ServiceCall) -> ServiceResponse:
     """Unlock layers to allow modifications."""
+    from .services_phase3 import handle_unlock_layer as _handle_unlock
+    
+    hass = call.context.hass
     try:
         switches = await _get_switch_entities(hass, call)
     except ServiceValidationError as e:
         return ServiceResponse(iserr=True, data={"error": str(e)})
     
-    results = []
-    for switch in switches:
-        try:
-            success = await switch.coordinator.update_layer(
-                switch.layer_id,
-                **{ATTR_LOCKED: False}
-            )
-            if success:
-                hass.bus.async_fire(
-                    EVENT_LAYER_UNLOCKED,
-                    {
-                        "zone_id": switch.coordinator.zone_id,
-                        "layer_id": switch.layer_id,
-                        "timestamp": dt_util.now().isoformat(),
-                    }
-                )
-            results.append({
-                "entity_id": switch.entity_id,
-                "success": success,
-                "layer_id": switch.layer_id,
-            })
-        except Exception as e:
-            _LOGGER.error("Failed to unlock layer %s: %s", switch.entity_id, e)
-            results.append({
-                "entity_id": switch.entity_id,
-                "success": False,
-                "error": str(e),
-            })
-    
-    return ServiceResponse(iserr=False, data={"results": results})
+    return await _handle_unlock(hass, call, switches)
 
 
-async def handle_force_layer(hass: HomeAssistant, call: ServiceCall) -> ServiceResponse:
+async def handle_force_layer(call: ServiceCall) -> ServiceResponse:
     """Force layers to override priority system."""
+    from .services_phase3 import handle_force_layer as _handle_force
+    
+    hass = call.context.hass
     try:
         switches = await _get_switch_entities(hass, call)
     except ServiceValidationError as e:
         return ServiceResponse(iserr=True, data={"error": str(e)})
     
-    force_value = call.data.get("force", True)
-    results = []
-    for switch in switches:
-        try:
-            success = await switch.coordinator.update_layer(
-                switch.layer_id,
-                **{ATTR_FORCE: force_value}
-            )
-            if success and force_value:
-                hass.bus.async_fire(
-                    EVENT_LAYER_FORCED,
-                    {
-                        "zone_id": switch.coordinator.zone_id,
-                        "layer_id": switch.layer_id,
-                        "timestamp": dt_util.now().isoformat(),
-                    }
-                )
-            results.append({
-                "entity_id": switch.entity_id,
-                "success": success,
-                "layer_id": switch.layer_id,
-                "forced": force_value,
-            })
-        except Exception as e:
-            _LOGGER.error("Failed to force layer %s: %s", switch.entity_id, e)
-            results.append({
-                "entity_id": switch.entity_id,
-                "success": False,
-                "error": str(e),
-            })
-    
-    return ServiceResponse(iserr=False, data={"results": results})
+    return await _handle_force(hass, call, switches)
 
 
-async def handle_unforce_layer(hass: HomeAssistant, call: ServiceCall) -> ServiceResponse:
+async def handle_unforce_layer(call: ServiceCall) -> ServiceResponse:
     """Remove force flag from layers."""
     call.data["force"] = False
-    return await handle_force_layer(hass, call)
+    return await handle_force_layer(call)
 
 
-async def handle_recalculate_zone(hass: HomeAssistant, call: ServiceCall) -> ServiceResponse:
+async def handle_recalculate_zone(call: ServiceCall) -> ServiceResponse:
     """Force immediate recalculation for a zone."""
+    from .services_phase3 import handle_recalculate_zone as _handle_recalc
+    
+    hass = call.context.hass
     zone_id = call.data["zone_id"]
     
     try:
@@ -608,29 +528,14 @@ async def handle_recalculate_zone(hass: HomeAssistant, call: ServiceCall) -> Ser
     except ServiceValidationError as e:
         return ServiceResponse(iserr=True, data={"error": str(e)})
     
-    try:
-        # Force immediate recalculation
-        await coordinator.async_refresh()
-        
-        return ServiceResponse(
-            iserr=False,
-            data={
-                "zone_id": zone_id,
-                "success": True,
-                "winning_layer": coordinator.data.get("winning_layer"),
-                "final_state": coordinator.data.get("final_state"),
-            }
-        )
-    except Exception as e:
-        _LOGGER.error("Failed to recalculate zone %s: %s", zone_id, e)
-        return ServiceResponse(
-            iserr=True,
-            data={"error": str(e)}
-        )
+    return await _handle_recalc(hass, zone_id, coordinator)
 
 
-async def handle_reset_zone(hass: HomeAssistant, call: ServiceCall) -> ServiceResponse:
+async def handle_reset_zone(call: ServiceCall) -> ServiceResponse:
     """Reset zone by deactivating all layers except base."""
+    from .services_phase3 import handle_reset_zone as _handle_reset
+    
+    hass = call.context.hass
     zone_id = call.data["zone_id"]
     
     try:
@@ -638,41 +543,14 @@ async def handle_reset_zone(hass: HomeAssistant, call: ServiceCall) -> ServiceRe
     except ServiceValidationError as e:
         return ServiceResponse(iserr=True, data={"error": str(e)})
     
-    try:
-        # Deactivate all layers except base_adaptive
-        from .const import LAYER_BASE_ADAPTIVE
-        
-        for layer_id in list(coordinator.layers.keys()):
-            if layer_id != LAYER_BASE_ADAPTIVE:
-                await coordinator.update_layer(layer_id, **{ATTR_IS_ON: False})
-        
-        # Fire reset event
-        hass.bus.async_fire(
-            EVENT_ZONE_RESET,
-            {
-                "zone_id": zone_id,
-                "timestamp": dt_util.now().isoformat(),
-            }
-        )
-        
-        return ServiceResponse(
-            iserr=False,
-            data={
-                "zone_id": zone_id,
-                "success": True,
-                "layers_reset": len(coordinator.layers) - 1,
-            }
-        )
-    except Exception as e:
-        _LOGGER.error("Failed to reset zone %s: %s", zone_id, e)
-        return ServiceResponse(
-            iserr=True,
-            data={"error": str(e)}
-        )
+    return await _handle_reset(hass, zone_id, coordinator)
 
 
-async def handle_apply_preset(hass: HomeAssistant, call: ServiceCall) -> ServiceResponse:
+async def handle_apply_preset(call: ServiceCall) -> ServiceResponse:
     """Apply a preset configuration atomically."""
+    from .services_phase3 import handle_apply_preset as _handle_preset
+    
+    hass = call.context.hass
     zone_id = call.data["zone_id"]
     preset_name = call.data["preset_name"]
     transition = call.data.get(ATTR_TRANSITION, 2.0)
@@ -682,52 +560,4 @@ async def handle_apply_preset(hass: HomeAssistant, call: ServiceCall) -> Service
     except ServiceValidationError as e:
         return ServiceResponse(iserr=True, data={"error": str(e)})
     
-    # Define presets
-    presets = {
-        "bright": {"brightness": 255, "color_temp": 153, "is_on": True},
-        "dim": {"brightness": 77, "color_temp": 370, "is_on": True},
-        "movie": {"brightness": 30, "color_temp": 500, "is_on": True},
-        "adaptive": {"is_on": False},  # Turn off manual, let adaptive take over
-        "off": {"is_on": False},
-    }
-    
-    if preset_name not in presets:
-        return ServiceResponse(
-            iserr=True,
-            data={"error": f"Unknown preset: {preset_name}"}
-        )
-    
-    try:
-        preset_data = presets[preset_name]
-        preset_data[ATTR_TRANSITION] = transition
-        
-        # Apply to manual layer or create if doesn't exist
-        if "manual" not in coordinator.layers:
-            await coordinator.create_layer("Manual", priority=50, **preset_data)
-        else:
-            await coordinator.update_layer("manual", **preset_data)
-        
-        # Fire preset event
-        hass.bus.async_fire(
-            EVENT_PRESET_APPLIED,
-            {
-                "zone_id": zone_id,
-                "preset_name": preset_name,
-                "timestamp": dt_util.now().isoformat(),
-            }
-        )
-        
-        return ServiceResponse(
-            iserr=False,
-            data={
-                "zone_id": zone_id,
-                "preset_name": preset_name,
-                "success": True,
-            }
-        )
-    except Exception as e:
-        _LOGGER.error("Failed to apply preset %s to zone %s: %s", preset_name, zone_id, e)
-        return ServiceResponse(
-            iserr=True,
-            data={"error": str(e)}
-        )
+    return await _handle_preset(hass, zone_id, preset_name, coordinator, transition)
