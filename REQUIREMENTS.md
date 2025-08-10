@@ -1,4 +1,4 @@
-# Lighting Manager Requirements Specification 
+# Lighting Manager Requirements Specification
 
 ## Executive Summary
 
@@ -96,11 +96,14 @@ The Lighting Manager is a Home Assistant integration that implements a sophistic
 - **REQ-A001**: `lighting_manager.activate_layer`
   - Target: layer entity
   - Fields: brightness, color_temp, rgb_color, transition, source
+  
 - **REQ-A002**: `lighting_manager.deactivate_layer`
   - Target: layer entity
+  
 - **REQ-A003**: `lighting_manager.update_layer`
   - Target: layer entity
   - Fields: All mutable state properties
+  
 - **REQ-A004**: `lighting_manager.set_layer_priority`
   - Target: layer entity
   - Fields: priority (0-100)
@@ -109,8 +112,10 @@ The Lighting Manager is a Home Assistant integration that implements a sophistic
 - **REQ-A005**: `lighting_manager.lock_layer`
   - Target: layer entity
   - Prevents all modifications
+  
 - **REQ-A006**: `lighting_manager.unlock_layer`
   - Target: layer entity
+  
 - **REQ-A007**: `lighting_manager.force_layer`
   - Target: layer entity
   - Makes layer apply regardless of priority
@@ -119,6 +124,7 @@ The Lighting Manager is a Home Assistant integration that implements a sophistic
 - **REQ-A008**: `lighting_manager.recalculate_zone`
   - Fields: zone_id
   - Forces immediate recalculation
+  
 - **REQ-A009**: `lighting_manager.reset_zone`
   - Fields: zone_id
   - Deactivates all layers except base
@@ -127,6 +133,7 @@ The Lighting Manager is a Home Assistant integration that implements a sophistic
 - **REQ-A010**: `lighting_manager.create_dynamic_layer`
   - Fields: zone_id, layer_id, priority
   - Creates temporary layers for special events
+  
 - **REQ-A011**: `lighting_manager.apply_preset`
   - Fields: zone_id, preset_name
   - Configures multiple layers atomically

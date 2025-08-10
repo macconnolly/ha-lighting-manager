@@ -1,3 +1,5 @@
+---
+
 # Lighting Manager Home Assistant Custom Component
 
 **Version:** 0.0.5
@@ -9,11 +11,12 @@ The component is entirely implemented using Home Assistant’s entity, state and
 
 ## Features
 
-### Layer Entities
+### Layered Scenes and States
 
-* **Layer concept:** Each configured zone automatically creates five predefined `layer` entities (`base_adaptive`, `environmental`, `activity`, `mode`, and `manual`). Each layer holds optional brightness and colour settings along with a priority value. The active layer with the highest priority controls the lights in the zone.
-* **Layer activation:** Call the `lighting_manager.activate_layer` service targeting a `layer` entity to activate it. You may supply `brightness`, `color_temp`, `rgb_color`, `transition`, `force`, or `locked` flags as needed.
-* **Layer update/deactivation:** Use `lighting_manager.update_layer` to modify a layer's attributes without changing its activation state. Use `lighting_manager.deactivate_layer` to turn a layer off.
+* **Layer concept:** Every scene or state you insert must include a unique layer `id` and a numerical `priority`. When more than one layer targets the same light, the layer with the highest priority wins. Under the hood the component maintains a dictionary of layers per entity (`DATA_STATES`) and chooses the active layer when rendering a light. Layers can be cleared individually or globally.
+* **Scene insertion:** Scenes can be applied on top of existing layers using the `insert_scene` service. You can optionally clear the target layer first (`clear_layer: true`) and fill in placeholder colours (`color: [R,G,B]`). Group scenes are automatically ungrouped so that all nested lights are targeted individually.
+* **Arbitrary state insertion:** Any Home Assistant entity (including lights, switches, sensors, etc.) can have a state inserted into a layer using the `insert_state` service. This allows you to set the `state` (e.g., “on”) and any additional `attributes` (e.g., brightness, colour temperature, effect). Groups are automatically expanded into their member entities. Lights will default to `effect: None` if an effect isn’t provided.
+* **Removal:** Use the `remove_layer` service to remove a layer from all lights or a specific light or group. Removing a layer causes the next highest‑priority layer for each light to become active.
 
 ### Adaptive Brightness and Color Temperature
 
@@ -243,7 +246,7 @@ data:
 
 When inserting states, the `attributes` dictionary can contain strings that begin with the word `adaptive` to enable time‑of‑day and sensor based adjustments. The syntax is:
 
-```
+```text
 adaptive[;key=value][;key=value]…
 ```
 
@@ -287,12 +290,3 @@ Lights that are turned off are automatically removed from the adaptive tracking 
 * **Colour lists:** The `color` argument to `insert_scene` can be three or four elements. If the scene contains `rgbw_color` attributes they will be padded or truncated accordingly.
 * **Groups:** Groups are only used as a convenience for targeting multiple lights. You cannot store a layered state on a group entity; rather each member light receives its own stored state.
 * **Adaptive remove behaviour:** `remove_adaptive` only stops automatic updates; it does not revert the light to a previous layer. Use `remove_layer` or insert a new state to change the light.
-
-## License and Acknowledgements
-
-This component is authored by [@zachcheatham](https://github.com/zachcheatham) and is provided here for informational purposes only. The documentation above was derived from inspecting the source code (`__init__.py`, `sensor.py` and `services.yaml`) and the embedded schemas. For the latest updates please consult the official repository at the URL specified in `manifest.json`.
-
----
-
-Above is the complete README content as requested.
-

@@ -1,0 +1,281 @@
+# Service definitions for Lighting Manager
+
+# Layer Creation
+create_layer:
+  name: Create Layer
+  description: Create a new layer for a zone
+  fields:
+    zone_id:
+      name: Zone ID
+      description: The zone to create the layer in
+      required: true
+      example: "living_room"
+      selector:
+        text:
+    layer_name:
+      name: Layer Name
+      description: Name for the new layer
+      required: true
+      example: "Movie Time"
+      selector:
+        text:
+    priority:
+      name: Priority
+      description: Layer priority (0-100, higher wins)
+      required: false
+      default: 50
+      selector:
+        number:
+          min: 0
+          max: 100
+          mode: slider
+    brightness:
+      name: Brightness
+      description: Brightness level (0-255)
+      required: false
+      selector:
+        number:
+          min: 0
+          max: 255
+    color_temp:
+      name: Color Temperature
+      description: Color temperature in mireds
+      required: false
+      selector:
+        number:
+          min: 153
+          max: 500
+    transition:
+      name: Transition
+      description: Transition time in seconds
+      required: false
+      default: 2.0
+      selector:
+        number:
+          min: 0
+          max: 300
+          step: 0.1
+
+# Layer Control Services
+activate_layer:
+  name: Activate Layer
+  description: Activate a layer with specified parameters
+  target:
+    entity:
+      integration: lighting_manager
+      domain: switch
+  fields:
+    brightness:
+      name: Brightness
+      description: Brightness level (0-255)
+      required: false
+      selector:
+        number:
+          min: 0
+          max: 255
+    color_temp:
+      name: Color Temperature
+      description: Color temperature in mireds
+      required: false
+      selector:
+        number:
+          min: 153
+          max: 500
+    rgb_color:
+      name: RGB Color
+      description: RGB color values
+      required: false
+      selector:
+        color_rgb:
+    transition:
+      name: Transition
+      description: Transition time in seconds
+      required: false
+      default: 2.0
+      selector:
+        number:
+          min: 0
+          max: 300
+          step: 0.1
+    source:
+      name: Source
+      description: What triggered this activation
+      required: false
+      example: "automation.sunset"
+      selector:
+        text:
+
+deactivate_layer:
+  name: Deactivate Layer
+  description: Deactivate specified layers
+  target:
+    entity:
+      integration: lighting_manager
+      domain: switch
+  fields:
+    source:
+      name: Source
+      description: What triggered this deactivation
+      required: false
+      example: "manual"
+      selector:
+        text:
+
+update_layer:
+  name: Update Layer
+  description: Update layer attributes without changing activation state
+  target:
+    entity:
+      integration: lighting_manager
+      domain: switch
+  fields:
+    brightness:
+      name: Brightness
+      description: Brightness level (0-255)
+      required: false
+      selector:
+        number:
+          min: 0
+          max: 255
+    color_temp:
+      name: Color Temperature
+      description: Color temperature in mireds
+      required: false
+      selector:
+        number:
+          min: 153
+          max: 500
+    rgb_color:
+      name: RGB Color
+      description: RGB color values
+      required: false
+      selector:
+        color_rgb:
+    transition:
+      name: Transition
+      description: Transition time in seconds
+      required: false
+      selector:
+        number:
+          min: 0
+          max: 300
+          step: 0.1
+
+set_layer_priority:
+  name: Set Layer Priority
+  description: Change the priority of a layer
+  target:
+    entity:
+      integration: lighting_manager
+      domain: switch
+  fields:
+    priority:
+      name: Priority
+      description: New priority value (0-100, higher wins)
+      required: true
+      selector:
+        number:
+          min: 0
+          max: 100
+          mode: slider
+
+# Layer State Services
+lock_layer:
+  name: Lock Layer
+  description: Lock a layer to prevent any modifications
+  target:
+    entity:
+      integration: lighting_manager
+      domain: switch
+
+unlock_layer:
+  name: Unlock Layer
+  description: Unlock a layer to allow modifications
+  target:
+    entity:
+      integration: lighting_manager
+      domain: switch
+
+force_layer:
+  name: Force Layer
+  description: Force a layer to override all other priorities
+  target:
+    entity:
+      integration: lighting_manager
+      domain: switch
+  fields:
+    force:
+      name: Force
+      description: Whether to force this layer
+      required: false
+      default: true
+      selector:
+        boolean:
+
+unforce_layer:
+  name: Unforce Layer
+  description: Remove force flag from a layer
+  target:
+    entity:
+      integration: lighting_manager
+      domain: switch
+
+# Zone Control Services
+recalculate_zone:
+  name: Recalculate Zone
+  description: Force immediate recalculation of zone lighting state
+  fields:
+    zone_id:
+      name: Zone ID
+      description: The zone to recalculate
+      required: true
+      example: "living_room"
+      selector:
+        text:
+
+reset_zone:
+  name: Reset Zone
+  description: Reset zone by deactivating all layers except base adaptive
+  fields:
+    zone_id:
+      name: Zone ID
+      description: The zone to reset
+      required: true
+      example: "living_room"
+      selector:
+        text:
+
+# Advanced Services
+apply_preset:
+  name: Apply Preset
+  description: Apply a preset configuration to a zone
+  fields:
+    zone_id:
+      name: Zone ID
+      description: The zone to apply the preset to
+      required: true
+      example: "living_room"
+      selector:
+        text:
+    preset_name:
+      name: Preset Name
+      description: Name of the preset to apply
+      required: true
+      selector:
+        select:
+          options:
+            - bright
+            - dim
+            - movie
+            - adaptive
+            - "off"
+    transition:
+      name: Transition
+      description: Transition time in seconds
+      required: false
+      default: 2.0
+      selector:
+        number:
+          min: 0
+          max: 300
+          step: 0.1
