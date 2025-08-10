@@ -76,8 +76,8 @@ _LOGGER = logging.getLogger(__name__)
 # Service Schemas
 SERVICE_SET_LAYER_SCHEMA = vol.Schema({
     vol.Required("zone_id"): cv.string,
-    vol.Required("layer_id"): cv.string,
-    vol.Optional("layer_name"): cv.string,
+    vol.Required("layer_name"): cv.string,  # layer_name is now required
+    vol.Optional("layer_id"): cv.string,  # layer_id is optional and will be derived
     vol.Optional(ATTR_LAYER_TYPE, default=LAYER_TYPE_ABSOLUTE): vol.In(
         ["absolute", "modifier", "multiplier"]
     ),
@@ -260,73 +260,92 @@ async def async_setup_services(hass: HomeAssistant) -> None:
     hass.data[DOMAIN][SERVICES_REGISTERED] = True
 
 
+async def _get_coordinator_from_call(hass: HomeAssistant, call: ServiceCall) -> ZoneCoordinator:
+    """Get the coordinator from a service call targeting a zone or entity.
+    
+    This elegant helper unifies coordinator retrieval for both zone-based
+    and entity-based service calls, avoiding redundant logic.
+    """
+    # Direct zone_id takes precedence - most efficient path
+    if zone_id := call.data.get("zone_id"):
+        # Iterate through lighting manager entries
+        for entry_id, entry_data in hass.data.get(DOMAIN, {}).items():
+            if entry_id == SERVICES_REGISTERED:
+                continue
+            coordinator = entry_data.get(DATA_COORDINATOR)
+            if coordinator and coordinator.zone_id == zone_id:
+                return coordinator
+        raise ServiceValidationError(f"Zone '{zone_id}' not found")
+    
+    # Handle entity-based calls
+    referenced = async_extract_referenced_entity_ids(hass, call)
+    entity_ids = referenced.referenced | referenced.indirectly_referenced
+    
+    if not entity_ids:
+        raise ServiceValidationError("Must provide 'zone_id' or target a lighting_manager entity")
+    
+    # Get coordinator from the first valid entity
+    entity_reg = er.async_get(hass)
+    
+    for entity_id in entity_ids:
+        if not (entry := entity_reg.async_get(entity_id)):
+            continue
+        
+        # Verify it's our platform and get coordinator directly
+        if entry.platform == DOMAIN and entry.config_entry_id:
+            if entry_data := hass.data.get(DOMAIN, {}).get(entry.config_entry_id):
+                if coordinator := entry_data.get(DATA_COORDINATOR):
+                    return coordinator
+    
+    raise ServiceValidationError("No valid lighting_manager entity found in targets")
+
+
 async def _get_switch_entities(hass: HomeAssistant, call: ServiceCall) -> list:
-    """Extract and validate switch entities from service call."""
-    # Extract referenced entities
+    """Extract and validate switch entities from service call.
+    
+    Returns a list of switch proxy objects with entity_id, layer_id, and coordinator.
+    """
     referenced = async_extract_referenced_entity_ids(hass, call)
     entity_ids = referenced.referenced | referenced.indirectly_referenced
     
     if not entity_ids:
         raise ServiceValidationError("No target entities specified")
     
-    # Get entity registry
     entity_reg = er.async_get(hass)
     switches = []
     
+    # Simple switch proxy to hold needed attributes
+    from dataclasses import dataclass
+    
+    @dataclass
+    class SwitchProxy:
+        entity_id: str
+        layer_id: str
+        coordinator: ZoneCoordinator
+    
     for entity_id in entity_ids:
-        # Get entity from registry
-        entry = entity_reg.async_get(entity_id)
-        if not entry or entry.platform != DOMAIN:
+        # Skip if not in registry or not our platform
+        if not (entry := entity_reg.async_get(entity_id)) or entry.platform != DOMAIN:
             _LOGGER.warning("Entity %s is not a lighting_manager switch", entity_id)
             continue
         
-        # Get the actual switch entity
-        state = hass.states.get(entity_id)
-        if not state:
+        # Get state to extract layer_id
+        if not (state := hass.states.get(entity_id)):
             _LOGGER.warning("Entity %s not found in states", entity_id)
             continue
         
-        # Check if this is a layer switch by checking the registry entry
-        # and state attributes
-        if (entry.platform == DOMAIN and 
-            state.attributes.get("layer_id") and 
-            state.attributes.get("zone_id")):
-            # Create a simple object that has the needed attributes
-            class SwitchProxy:
-                def __init__(self, entity_id, state, entry):
-                    self.entity_id = entity_id
-                    self.layer_id = state.attributes.get("layer_id")
-                    # Get coordinator from domain data
-                    config_entry_id = entry.config_entry_id
-                    if config_entry_id in hass.data[DOMAIN]:
-                        self.coordinator = hass.data[DOMAIN][config_entry_id].get(DATA_COORDINATOR)
-            
-            proxy = SwitchProxy(entity_id, state, entry)
-            if proxy.coordinator:
-                switches.append(proxy)
-            else:
-                _LOGGER.warning("No coordinator found for entity %s", entity_id)
-        else:
-            _LOGGER.warning("Entity %s is not a valid layer switch", entity_id)
+        # Validate it's a layer switch and extract coordinator
+        if (layer_id := state.attributes.get("layer_id")) and entry.config_entry_id:
+            if entry_data := hass.data.get(DOMAIN, {}).get(entry.config_entry_id):
+                if coordinator := entry_data.get(DATA_COORDINATOR):
+                    switches.append(SwitchProxy(entity_id, layer_id, coordinator))
+                else:
+                    _LOGGER.warning("No coordinator found for entity %s", entity_id)
     
     if not switches:
         raise ServiceValidationError("No valid layer switches found in targets")
     
     return switches
-
-
-async def _get_zone_coordinator(hass: HomeAssistant, zone_id: str):
-    """Get coordinator for a specific zone."""
-    # Find the config entry for this zone
-    for entry_id, entry_data in hass.data.get(DOMAIN, {}).items():
-        if entry_id == SERVICES_REGISTERED:
-            continue
-        
-        coordinator = entry_data.get(DATA_COORDINATOR)
-        if coordinator and coordinator.zone_id == zone_id:
-            return coordinator
-    
-    raise ServiceValidationError(f"Zone '{zone_id}' not found")
 
 
 # Service Handlers
@@ -340,16 +359,13 @@ async def handle_create_layer(hass: HomeAssistant, call: ServiceCall) -> None:
     - priority: Layer priority (optional)
     - brightness/color_temp/transition: Initial settings (optional)
     """
-    zone_id = call.data.get("zone_id")
     layer_name = call.data.get("layer_name")
     
-    if not zone_id:
-        raise ServiceValidationError("zone_id is required")
     if not layer_name:
         raise ServiceValidationError("layer_name is required")
     
-    # Find the coordinator for this zone
-    coordinator = await _get_zone_coordinator(hass, zone_id)
+    # Use unified helper to get coordinator
+    coordinator = await _get_coordinator_from_call(hass, call)
     
     # Build layer attributes
     attributes = {}
@@ -382,21 +398,26 @@ async def handle_set_layer(hass: HomeAssistant, call: ServiceCall) -> ServiceRes
     create_layer and update_layer with a single, powerful interface.
     """
     zone_id = call.data["zone_id"]
-    layer_id = call.data["layer_id"]
+    layer_name = call.data["layer_name"]  # Required now
+    
+    # Derive layer_id from layer_name for consistency
+    # Use provided layer_id only if updating an existing layer
+    if "layer_id" in call.data:
+        # For backward compatibility when updating existing layers
+        layer_id = call.data["layer_id"]
+    else:
+        # Derive from layer_name
+        layer_id = validate_layer_name(layer_name)
     
     try:
         # Get the coordinator for this zone
-        coordinator = await _get_zone_coordinator(hass, zone_id)
+        coordinator = await _get_coordinator_from_call(hass, call)
         
         # Prepare the layer attributes
         attributes = {}
         
-        # Basic attributes
-        if "layer_name" in call.data:
-            attributes[ATTR_LAYER_NAME] = call.data["layer_name"]
-        else:
-            # Default layer_name to layer_id if not provided
-            attributes[ATTR_LAYER_NAME] = layer_id.replace("_", " ").title()
+        # Layer name is always set
+        attributes[ATTR_LAYER_NAME] = layer_name
         
         # Layer type (critical for validation)
         layer_type = call.data.get(ATTR_LAYER_TYPE, LAYER_TYPE_ABSOLUTE)
@@ -1024,3 +1045,33 @@ async def handle_apply_preset(hass: HomeAssistant, call: ServiceCall) -> Service
             iserr=True,
             data={"error": str(e)}
         )
+
+
+def unload_services(hass: HomeAssistant) -> None:
+    """Unload all lighting manager services."""
+    _LOGGER.info("Unloading lighting manager services")
+    
+    # List of all service names to unload
+    services = [
+        "set_layer",
+        "update_layer",
+        "delete_layer",
+        "activate_layer",
+        "deactivate_layer",
+        "clear_zone",
+        "recalculate_zone",
+        "list_layers",
+        "get_layer",
+        "lock_layer",
+        "unlock_layer",
+        "force_layer",
+        "apply_preset",
+        "create_layer",
+    ]
+    
+    for service in services:
+        if hass.services.has_service(DOMAIN, service):
+            hass.services.async_remove(DOMAIN, service)
+            _LOGGER.debug("Removed service: %s", service)
+    
+    _LOGGER.info("All lighting manager services unloaded")

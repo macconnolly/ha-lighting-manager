@@ -118,7 +118,7 @@ automation:
                     - service: lighting_manager.set_layer
                       data:
                         zone_id: "{{ repeat.item }}"
-                        layer_id: "presence_modifier"
+                        layer_id: "modifier_presence"
                         layer_name: "Away Mode"
                         layer_type: "modifier"
                         priority: "{{ priority }}"
@@ -158,7 +158,7 @@ automation:
                     - service: lighting_manager.set_layer
                       data:
                         zone_id: "{{ repeat.item }}"
-                        layer_id: "social_modifier"
+                        layer_id: "modifier_social"
                         layer_name: "Social Mode"
                         layer_type: "modifier"
                         priority: 48
@@ -203,7 +203,7 @@ automation:
             - service: lighting_manager.set_layer
               data:
                 zone_id: "{{ repeat.item }}"
-                layer_id: "arrival_welcome"
+                layer_id: "modifier_arrival"
                 layer_name: "Welcome Home"
                 layer_type: "modifier"
                 priority: 65
@@ -217,68 +217,6 @@ automation:
                 entity_id: "switch.{{ repeat.item }}_arrival_welcome_layer"
               continue_on_error: true
 
-  - alias: "Lighting: Departure Sequence"
-    id: lighting_departure_sequence
-    description: "Gradual lighting reduction when last person leaves"
-    mode: single
-    
-    trigger:
-      - platform: state
-        entity_id: sensor.home_presence_status
-        to: "nobody"
-    
-    action:
-      # Stage 1: Dim common areas immediately
-      - repeat:
-          for_each: >
-            {% set all_zones = state_attr('sensor.lighting_manager_zones', 'zone_ids') | default([]) %}
-            {{ all_zones | reject('search', 'exterior|outdoor|porch') | list }}
-          sequence:
-            - service: lighting_manager.set_layer
-              data:
-                zone_id: "{{ repeat.item }}"
-                layer_id: "departure_dim"
-                layer_name: "Departure Mode"
-                layer_type: "modifier"
-                priority: 70
-                brightness_pct_delta: -30
-                transition: 10
-                timeout_minutes: 15
-            
-            - service: switch.turn_on
-              target:
-                entity_id: "switch.{{ repeat.item }}_departure_dim_layer"
-              continue_on_error: true
-      
-      # Wait 5 minutes
-      - delay:
-          minutes: 5
-      
-      # Stage 2: Further reduction if still nobody home
-      - condition: state
-        entity_id: sensor.home_presence_status
-        state: "nobody"
-      
-      - repeat:
-          for_each: >
-            {% set all_zones = state_attr('sensor.lighting_manager_zones', 'zone_ids') | default([]) %}
-            {{ all_zones | reject('search', 'exterior|outdoor|porch') | list }}
-          sequence:
-            - service: lighting_manager.set_layer
-              data:
-                zone_id: "{{ repeat.item }}"
-                layer_id: "departure_dim"
-                layer_name: "Away Mode"
-                layer_type: "modifier"
-                priority: 70
-                brightness_pct_delta: -50
-                transition: 30
-                timeout_minutes: 0
-            
-            - service: switch.turn_on
-              target:
-                entity_id: "switch.{{ repeat.item }}_departure_dim_layer"
-              continue_on_error: true
 
   - alias: "Lighting: Vacation Simulator"
     id: lighting_vacation_simulator
@@ -307,7 +245,7 @@ automation:
       - service: lighting_manager.set_layer
         data:
           zone_id: "{{ selected_zone }}"
-          layer_id: "vacation_sim"
+          layer_id: "modifier_vacation"
           layer_name: "Vacation Simulator"
           layer_type: "modifier"
           priority: 55

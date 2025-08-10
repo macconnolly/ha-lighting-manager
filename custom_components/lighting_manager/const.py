@@ -19,6 +19,10 @@ DEFAULT_BRIGHTNESS_MAX: Final = 100
 DEFAULT_COLOR_TEMP_MIN: Final = 2000  # Kelvin (warm)
 DEFAULT_COLOR_TEMP_MAX: Final = 6500  # Kelvin (cool)
 
+# Temperature limits for calculations
+KELVIN_MIN: Final = 1500  # Absolute minimum Kelvin (candle-like)
+KELVIN_MAX: Final = 10000  # Absolute maximum Kelvin (blue sky)
+
 # Debouncing
 DEBOUNCE_SECONDS: Final = 0.1  # 100ms
 

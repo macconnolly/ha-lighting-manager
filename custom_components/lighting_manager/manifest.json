@@ -1,13 +1,13 @@
 {
   "domain": "lighting_manager",
   "name": "Lighting Manager",
-  "codeowners": ["@your-github-username"],
+  "codeowners": ["@lighting-manager"],
   "config_flow": true,
   "dependencies": ["light"],
-  "documentation": "https://github.com/yourusername/lighting_manager",
+  "documentation": "https://github.com/lighting-manager/lighting-manager",
   "integration_type": "device",
   "iot_class": "local_push",
-  "issue_tracker": "https://github.com/yourusername/lighting_manager/issues",
+  "issue_tracker": "https://github.com/lighting-manager/lighting-manager/issues",
   "requirements": [],
-  "version": "4.0.0"
+  "version": "5.0.0"
 }

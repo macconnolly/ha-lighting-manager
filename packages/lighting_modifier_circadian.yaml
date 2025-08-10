@@ -123,11 +123,6 @@ automation:
         variables:
           trigger_type: manual_toggle
       
-      # Periodic refresh for active modifiers
-      - platform: time_pattern
-        minutes: "/10"
-        variables:
-          trigger_type: refresh
     
     condition:
       - condition: state
@@ -173,19 +168,15 @@ automation:
                   - service: lighting_manager.set_layer
                     data:
                       zone_id: "{{ repeat.item }}"
-                      layer_id: "circadian"
+                      layer_id: "modifier_circadian"
                       layer_name: "Circadian: {{ phase | title }}"
                       layer_type: "modifier"
                       priority: "{{ priority }}"
                       brightness_pct_delta: "{{ brightness_mod }}"
                       color_temp_kelvin_delta: "{{ color_mod }}"
                       transition: "{{ transition }}"
-                      timeout_minutes: 15
-                  
-                  - service: switch.turn_on
-                    target:
-                      entity_id: "switch.{{ repeat.item }}_circadian_layer"
-                    continue_on_error: true
+                      timeout_minutes: 30  # Auto-expires and refreshes on phase change
+                      is_on: true  # Activate layer in same call
 
   - alias: "Lighting: Bedtime Wind Down"
     id: lighting_bedtime_wind_down

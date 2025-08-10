@@ -165,55 +165,28 @@ class ZoneCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def _get_current_data(self) -> dict[str, Any]:
         """Get current state data.
         
-        This is the GOLDEN PATH implementation - returns the layers 
-        dictionary directly, not through _async_update_data.
+        Simply returns self.data which is maintained in-place.
+        This avoids unnecessary data structure rebuilding.
         """
-        # Include last calculation result if available
-        calc_data = self._last_calculation or {
-            "winning_layer": None,
-            "final_state": {"power": "off"},
-            "conflicts": [],
-            "calculation_path": [],
+        # Update layers view with current state
+        self.data["layers"] = {
+            lid: {**layer}  # Shallow copy for read-only view
+            for lid, layer in self.layers.items()
         }
         
-        # Get list of active layer IDs for sensors
-        active_layer_ids = [
+        # Update active layer lists
+        self.data["active_layers"] = [
             lid for lid, layer in self.layers.items()
             if layer.get(ATTR_IS_ON, False)
         ]
         
-        # Build a read-only view of layers for consumers
-        # This is much faster than deepcopy and still prevents mutation
-        layers_view = {
-            lid: {**layer}  # Shallow copy of each layer
+        self.data["active_layers_full"] = [
+            {**layer, "layer_id": lid}
             for lid, layer in self.layers.items()
-        }
+            if layer.get(ATTR_IS_ON, False)
+        ]
         
-        return {
-            "layers": layers_view,  # Read-only view, much faster than deepcopy
-            "active_layers": active_layer_ids,  # Just IDs for sensors
-            "active_layers_full": [  # Full data for existing consumers
-                {**layer, "layer_id": lid}
-                for lid, layer in self.layers.items()
-                if layer.get(ATTR_IS_ON, False)
-            ],
-            "zone_id": self.zone_id,
-            "last_updated": get_timezone_aware_now(),
-            # Phase 2: Include calculation results
-            "winning_layer": calc_data.get("winning_layer"),
-            "final_state": calc_data.get("final_state", {}),
-            "conflicts": calc_data.get("conflicts", []),
-            "calculation_path": calc_data.get("calculation_path", []),
-            "applied_modifiers": calc_data.get("applied_modifiers", []),
-            # Phase 4: Additional fields for sensors
-            "last_calculation": calc_data.get("timestamp"),
-            "calculation_time_ms": calc_data.get("calculation_time_ms"),
-            "cache_hit": calc_data.get("cache_hit", False),
-            "trigger": calc_data.get("trigger"),
-            "lights_unavailable": calc_data.get("lights_unavailable", []),
-            "error": calc_data.get("error"),
-            "calculating": False,  # Set to True during calculation
-        }
+        return self.data
 
     async def async_load(self) -> None:
         """Load stored layer data from disk."""
@@ -563,21 +536,47 @@ class ZoneCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 calc_result.get("calculation_time_ms", 0)
             )
             
-            # Update and return the data
-            self.data = self._get_current_data()
+            # Update self.data in-place instead of rebuilding
+            self.data["winning_layer"] = calc_result.get("winning_layer")
+            self.data["final_state"] = calc_result.get("final_state", {})
+            self.data["conflicts"] = calc_result.get("conflicts", [])
+            self.data["calculation_path"] = calc_result.get("calculation_path", [])
+            self.data["applied_modifiers"] = calc_result.get("applied_modifiers", [])
+            self.data["last_calculation"] = dt_util.now().isoformat()
+            self.data["calculation_time_ms"] = calc_result.get("calculation_time_ms")
+            self.data["cache_hit"] = calc_result.get("cache_hit", False)
+            self.data["trigger"] = calc_result.get("trigger")
+            self.data["lights_unavailable"] = calc_result.get("lights_unavailable", [])
+            self.data["error"] = None
+            self.data["calculating"] = False
+            self.data["last_updated"] = get_timezone_aware_now()
+            
+            # Update layers view and active layers
+            self.data["layers"] = {
+                lid: {**layer}  # Shallow copy for read-only view
+                for lid, layer in self.layers.items()
+            }
+            self.data["active_layers"] = [
+                lid for lid, layer in self.layers.items()
+                if layer.get(ATTR_IS_ON, False)
+            ]
+            self.data["active_layers_full"] = [
+                {**layer, "layer_id": lid}
+                for lid, layer in self.layers.items()
+                if layer.get(ATTR_IS_ON, False)
+            ]
+            
+            # Store last calculation for reference
+            self._last_calculation = calc_result
+            
             return self.data
         except Exception as err:
             _LOGGER.error("Error in update cycle for zone %s: %s", self.zone_id, err, exc_info=True)
-            # Return last known good state
-            if self.data:
-                return self.data
-            # Or minimal safe state
-            return {
-                "layers": copy.deepcopy(self.layers),
-                "error": str(err),
-                "zone_id": self.zone_id,
-                "last_updated": get_timezone_aware_now(),
-            }
+            # Update error state in-place
+            self.data["error"] = str(err)
+            self.data["calculating"] = False
+            self.data["last_updated"] = get_timezone_aware_now()
+            return self.data
     
     def schedule_recalculation(self) -> None:
         """Schedule a recalculation with debouncing.
@@ -705,8 +704,8 @@ class ZoneCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "adaptive_factor": self._adaptive_factor,
             })
         
-        # Save and trigger update
-        await self.save_layers()
+        # Save and trigger update using the standard debounced methods
+        self.schedule_save()
         self.schedule_recalculation()
     
     async def async_shutdown(self) -> None:

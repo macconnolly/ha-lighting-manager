@@ -117,7 +117,7 @@ automation:
       - service: lighting_manager.set_layer
         data:
           zone_id: "{{ zone_name }}"
-          layer_id: "motion_boost"
+          layer_id: "modifier_motion"
           layer_name: "Motion Detected"
           layer_type: "modifier"
           priority: "{{ priority }}"
@@ -125,11 +125,7 @@ automation:
           color_temp_kelvin_delta: "{{ color_mod }}"
           transition: "{{ transition }}"
           timeout_minutes: "{{ timeout }}"
-      
-      - service: switch.turn_on
-        target:
-          entity_id: "switch.{{ zone_name }}_motion_boost_layer"
-        continue_on_error: true
+          is_on: true  # Activate layer in same call
 
   - alias: "Lighting: Occupancy-Based Dimming"
     id: lighting_occupancy_based_dimming
@@ -231,7 +227,7 @@ automation:
             - service: lighting_manager.set_layer
               data:
                 zone_id: "{{ repeat.item }}"
-                layer_id: "path_light"
+                layer_id: "modifier_path_light"
                 layer_name: "Path Light"
                 layer_type: "modifier"
                 priority: 75
@@ -239,11 +235,7 @@ automation:
                 color_temp_kelvin_delta: -600  # Very warm for night
                 transition: 0.5  # Quick activation
                 timeout_minutes: 3  # Short duration
-            
-            - service: switch.turn_on
-              target:
-                entity_id: "switch.{{ repeat.item }}_path_light_layer"
-              continue_on_error: true
+                is_on: true  # Activate layer in same call
             
             # Stagger activation for wave effect
             - delay:

@@ -66,17 +66,14 @@ automation:
             - service: lighting_manager.set_layer
               data:
                 zone_id: "{{ repeat.item }}"
-                layer_id: "quick_boost"
+                layer_id: "modifier_quick_boost"
                 layer_name: "Quick Boost"
                 layer_type: "modifier"
                 priority: 80  # High priority to override most layers
                 brightness_pct_delta: 30
                 transition: 1
                 timeout_minutes: 15  # Auto-expires
-            
-            - service: switch.turn_on
-              target:
-                entity_id: "switch.{{ repeat.item }}_quick_boost_layer"
+                is_on: true  # Activate layer in same call
 
   - alias: "Lighting: Temporary Dim Mode"
     id: lighting_temporary_dim_mode
@@ -168,7 +165,7 @@ automation:
                     - service: lighting_manager.set_layer
                       data:
                         zone_id: "{{ repeat.item }}"
-                        layer_id: "manual_override"
+                        layer_id: "modifier_manual_override"
                         layer_name: "Manual Override"
                         layer_type: "modifier"
                         priority: 85
@@ -176,16 +173,13 @@ automation:
                         color_temp_kelvin_delta: "{{ color_delta if color_delta != 0 else omit }}"
                         transition: 2
                         timeout_minutes: 120  # 2 hours default
-                    
-                    - service: switch.turn_on
-                      target:
-                        entity_id: "switch.{{ repeat.item }}_manual_override_layer"
+                        is_on: true  # Activate layer in same call
               
               # Remove override if both are zero
               default:
                 - service: switch.turn_off
                   target:
-                    entity_id: "switch.{{ repeat.item }}_manual_override_layer"
+                    entity_id: "switch.{{ repeat.item }}_modifier_manual_override_layer"
                   continue_on_error: true
 
   - alias: "Lighting: Guest Override"

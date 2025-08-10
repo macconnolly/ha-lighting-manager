@@ -32,6 +32,7 @@ from .const import (
     ATTR_LAYER_TYPE,
     LAYER_TYPE_MODIFIER,
     LAYER_TYPE_MULTIPLIER,
+    SW_VERSION,
 )
 from .coordinator import ZoneCoordinator
 
@@ -63,7 +64,7 @@ class LightingManagerSensorBase(CoordinatorEntity, SensorEntity):
             "name": coordinator.zone_name,
             "manufacturer": "Lighting Manager",
             "model": "Zone Controller",
-            "sw_version": "2.0.0",
+            "sw_version": SW_VERSION,
         }
     
     @property
@@ -352,7 +353,7 @@ class GlobalZonesSensor(SensorEntity):
             "name": "Lighting Manager",
             "manufacturer": "Lighting Manager",
             "model": "Zone Controller",
-            "sw_version": "2.0.0",
+            "sw_version": SW_VERSION,
         }
         
         _LOGGER.info("GlobalZonesSensor initialized")

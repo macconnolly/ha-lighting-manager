@@ -56,32 +56,15 @@ template:
           brightness_delta: >
             {% set score = states('sensor.lighting_weather_impact') | int %}
             {% set hour = now().hour %}
+            {% set is_daytime = 6 <= hour <= 20 %}
             
-            {# Scale brightness boost based on impact and time of day #}
-            {% if 6 <= hour <= 20 %}
-              {# Daytime: full boost #}
-              {% if score >= 70 %}
-                25
-              {% elif score >= 50 %}
-                18
-              {% elif score >= 30 %}
-                12
-              {% elif score >= 25 %}
-                8
-              {% else %}
-                0
-              {% endif %}
+            {# Smooth interpolation based on score #}
+            {% if score == 0 %}
+              0
             {% else %}
-              {# Nighttime: reduced boost #}
-              {% if score >= 70 %}
-                15
-              {% elif score >= 50 %}
-                10
-              {% elif score >= 30 %}
-                6
-              {% else %}
-                0
-              {% endif %}
+              {% set base_boost = (score / 4) | round(0) %}
+              {% set time_factor = 1.0 if is_daytime else 0.6 %}
+              {{ (base_boost * time_factor) | round(0) }}
             {% endif %}
           
           color_temp_delta: >
@@ -178,7 +161,7 @@ automation:
                     - service: lighting_manager.set_layer
                       data:
                         zone_id: "{{ repeat.item }}"
-                        layer_id: "weather_impact"
+                        layer_id: "modifier_weather"
                         layer_name: "Weather: {{ states('weather.home') | replace('-', ' ') | title }}"
                         layer_type: "modifier"
                         priority: "{{ priority }}"
@@ -193,11 +176,7 @@ automation:
                             5
                           {% endif %}
                         timeout_minutes: 60
-                    
-                    - service: switch.turn_on
-                      target:
-                        entity_id: "switch.{{ repeat.item }}_weather_impact_layer"
-                      continue_on_error: true
+                        is_on: true  # Activate layer in same call
           
           # Remove weather modifiers
           - conditions:
@@ -208,7 +187,7 @@ automation:
                 target:
                   entity_id: >
                     {{ expand(state_attr('sensor.lighting_manager_zones', 'zone_ids') | default([])
-                       | map('regex_replace', '(.*)', 'switch.\\1_weather_impact_layer') | list) 
+                       | map('regex_replace', '(.*)', 'switch.\\1_modifier_weather_layer') | list) 
                        | selectattr('state', 'eq', 'on')
                        | map(attribute='entity_id') | list }}
                 continue_on_error: true
@@ -235,7 +214,7 @@ automation:
             - service: lighting_manager.set_layer
               data:
                 zone_id: "{{ repeat.item }}"
-                layer_id: "storm_safety"
+                layer_id: "modifier_storm_safety"
                 layer_name: "Storm Safety"
                 layer_type: "modifier"
                 priority: 85  # Very high priority
@@ -243,11 +222,7 @@ automation:
                 color_temp_kelvin_delta: 200  # Cooler for alertness
                 transition: 0.5  # Near instant
                 timeout_minutes: 30
-            
-            - service: switch.turn_on
-              target:
-                entity_id: "switch.{{ repeat.item }}_storm_safety_layer"
-              continue_on_error: true
+                is_on: true  # Activate layer in same call
       
       # Schedule removal check
       - delay:
@@ -261,7 +236,7 @@ automation:
         target:
           entity_id: >
             {{ expand(state_attr('sensor.lighting_manager_zones', 'zone_ids') | default([])
-               | map('regex_replace', '(.*)', 'switch.\\1_storm_safety_layer') | list) 
+               | map('regex_replace', '(.*)', 'switch.\\1_modifier_storm_safety_layer') | list) 
                | selectattr('state', 'eq', 'on')
                | map(attribute='entity_id') | list }}
         continue_on_error: true

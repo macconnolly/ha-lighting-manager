@@ -149,7 +149,7 @@ automation:
                     - service: lighting_manager.set_layer
                       data:
                         zone_id: "{{ repeat.item }}"
-                        layer_id: "home_mode"
+                        layer_id: "modifier_home"
                         layer_name: "Mode: Away"
                         layer_type: "modifier"
                         priority: "{{ priority }}"
@@ -158,10 +158,6 @@ automation:
                         transition: 5
                         timeout_minutes: 0  # No timeout for persistent modes
                     
-                    - service: switch.turn_on
-                      target:
-                        entity_id: "switch.{{ repeat.item }}_home_mode_layer"
-                      continue_on_error: true
           
           # Sleep mode - dim and warm
           - conditions:
@@ -174,7 +170,7 @@ automation:
                     - service: lighting_manager.set_layer
                       data:
                         zone_id: "{{ repeat.item }}"
-                        layer_id: "home_mode"
+                        layer_id: "modifier_home"
                         layer_name: "Mode: Sleep"
                         layer_type: "modifier"
                         priority: "{{ priority }}"
@@ -183,10 +179,6 @@ automation:
                         transition: 30
                         timeout_minutes: 0
                     
-                    - service: switch.turn_on
-                      target:
-                        entity_id: "switch.{{ repeat.item }}_home_mode_layer"
-                      continue_on_error: true
           
           # Home mode - remove modifiers
           - conditions:
@@ -220,30 +212,22 @@ automation:
       all_zones: "{{ state_attr('sensor.lighting_manager_zones', 'zone_ids') | default([]) }}"
     
     action:
-      # First, clear modifiers from unaffected zones
-      - repeat:
-          for_each: >
-            {% set unaffected = [] %}
-            {% for zone in all_zones %}
-              {% if zone not in affected_zones %}
-                {% set unaffected = unaffected + [zone] %}
-              {% endif %}
-            {% endfor %}
-            {{ unaffected }}
-          sequence:
-            - service: switch.turn_off
-              target:
-                entity_id: "switch.{{ repeat.item }}_activity_mode_layer"
-              continue_on_error: true
+      # First, elegantly turn off ALL activity layers (single service call)
+      - service: switch.turn_off
+        target:
+          entity_id: >
+            {{ state_attr('sensor.lighting_manager_zones', 'zone_ids') | default([])
+               | map('regex_replace', '(.*)', 'switch.\\1_modifier_activity_layer') | list }}
+        continue_on_error: true
       
-      # Apply modifiers to affected zones
+      # Then apply modifiers ONLY to affected zones
       - repeat:
           for_each: "{{ affected_zones }}"
           sequence:
             - service: lighting_manager.set_layer
               data:
                 zone_id: "{{ repeat.item }}"
-                layer_id: "activity_mode"
+                layer_id: "modifier_activity"  # Consistent naming
                 layer_name: "Activity: {{ activity | title }}"
                 layer_type: "modifier"
                 priority: "{{ priority }}"
@@ -258,8 +242,4 @@ automation:
                     5
                   {% endif %}
                 timeout_minutes: 0
-            
-            - service: switch.turn_on
-              target:
-                entity_id: "switch.{{ repeat.item }}_activity_mode_layer"
-              continue_on_error: true
+                is_on: true  # Activate layer in same call

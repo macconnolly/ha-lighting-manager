@@ -1,0 +1,273 @@
+# Example configuration.yaml for Lighting Manager
+# This shows how to set up zones without using the UI
+
+# First, you need to manually create the config entries for each zone
+# Since the integration uses config flow, we need to work around this
+# by using the service API to configure zones after Home Assistant starts
+
+homeassistant:
+  # Include the packages
+  packages:
+    lighting_zones: !include packages/lighting_zones_setup.yaml
+    lighting_weather: !include packages/lighting_modifier_weather.yaml
+    lighting_circadian: !include packages/lighting_modifier_circadian.yaml
+    lighting_activities: !include packages/lighting_modifier_activities.yaml
+    lighting_motion: !include packages/lighting_modifier_motion.yaml
+    lighting_presence: !include packages/lighting_modifier_presence.yaml
+    lighting_overrides: !include packages/lighting_modifier_manual_override.yaml
+
+# Alternative: Define zones directly in automation
+automation:
+  - alias: "Setup Lighting Manager Zones"
+    id: setup_lighting_manager_zones
+    description: "Configure all lighting zones on startup"
+    
+    trigger:
+      - platform: homeassistant
+        event: start
+    
+    action:
+      # Wait for integrations to load
+      - delay:
+          seconds: 30
+      
+      # Define zone configurations
+      - variables:
+          zones:
+            - zone_id: "main_living"
+              zone_name: "Main Living Room"
+              lights:
+                - light.living_room_ceiling
+                - light.living_room_lamp
+              base_min_brightness: 30
+              base_max_brightness: 100
+              base_min_kelvin: 2200
+              base_max_kelvin: 3700
+              
+            - zone_id: "kitchen_island"
+              zone_name: "Kitchen Island"
+              lights:
+                - light.kitchen_island_1
+                - light.kitchen_island_2
+                - light.kitchen_island_3
+              base_min_brightness: 15
+              base_max_brightness: 100
+              base_min_kelvin: 2700
+              base_max_kelvin: 3700
+              
+            - zone_id: "bedroom_primary"
+              zone_name: "Primary Bedroom"
+              lights:
+                - light.bedroom_ceiling
+                - light.bedroom_lamp_left
+                - light.bedroom_lamp_right
+              base_min_brightness: 15
+              base_max_brightness: 80
+              base_min_kelvin: 1800
+              base_max_kelvin: 3700
+              
+            - zone_id: "accent_spots"
+              zone_name: "Accent Spots"
+              lights:
+                - light.accent_spot_1
+                - light.accent_spot_2
+                - light.accent_spot_3
+                - light.accent_spot_4
+              base_min_brightness: 5
+              base_max_brightness: 60
+              base_min_kelvin: 2200
+              base_max_kelvin: 3200
+              
+            - zone_id: "recessed_ceiling"
+              zone_name: "Recessed Ceiling"
+              lights:
+                - light.recessed_1
+                - light.recessed_2
+                - light.recessed_3
+                - light.recessed_4
+                - light.recessed_5
+                - light.recessed_6
+              base_min_brightness: 2
+              base_max_brightness: 35
+              base_min_kelvin: 1800
+              base_max_kelvin: 5000
+      
+      # Create layers for each zone
+      - repeat:
+          for_each: "{{ zones }}"
+          sequence:
+            # Create base manual layer
+            - service: lighting_manager.set_layer
+              data:
+                zone_id: "{{ repeat.item.zone_id }}"
+                layer_id: "manual"
+                layer_name: "Manual"
+                priority: 50
+                brightness: "{{ repeat.item.base_max_brightness }}"
+                color_temp: >
+                  {{ (1000000 / ((repeat.item.base_min_kelvin + repeat.item.base_max_kelvin) / 2)) | int }}
+                transition: 2
+              continue_on_error: true
+            
+            # Create adaptive layer with zone-specific ranges
+            - service: lighting_manager.set_layer
+              data:
+                zone_id: "{{ repeat.item.zone_id }}"
+                layer_id: "adaptive"
+                layer_name: "Adaptive"
+                priority: 30
+                brightness: >
+                  {% set sun_elevation = state_attr('sun.sun', 'elevation') | float(0) %}
+                  {% set min_b = repeat.item.base_min_brightness %}
+                  {% set max_b = repeat.item.base_max_brightness %}
+                  {% if sun_elevation < -6 %}
+                    {{ min_b }}
+                  {% elif sun_elevation > 10 %}
+                    {{ max_b }}
+                  {% else %}
+                    {{ (min_b + (max_b - min_b) * ((sun_elevation + 6) / 16)) | int }}
+                  {% endif %}
+                color_temp: >
+                  {% set sun_elevation = state_attr('sun.sun', 'elevation') | float(0) %}
+                  {% set min_k = repeat.item.base_min_kelvin %}
+                  {% set max_k = repeat.item.base_max_kelvin %}
+                  {% if sun_elevation < -6 %}
+                    {{ (1000000 / min_k) | int }}
+                  {% elif sun_elevation > 10 %}
+                    {{ (1000000 / max_k) | int }}
+                  {% else %}
+                    {% set k = min_k + (max_k - min_k) * ((sun_elevation + 6) / 16) %}
+                    {{ (1000000 / k) | int }}
+                  {% endif %}
+                transition: 30
+              continue_on_error: true
+            
+            # Enable adaptive by default
+            - service: switch.turn_on
+              target:
+                entity_id: "switch.{{ repeat.item.zone_id }}_adaptive_layer"
+              continue_on_error: true
+            
+            - delay:
+                seconds: 1
+
+# Template sensors to expose zone configuration
+template:
+  - sensor:
+      - name: "Main Living Config"
+        unique_id: main_living_config
+        state: "configured"
+        attributes:
+          min_brightness: 30
+          max_brightness: 100
+          min_kelvin: 2200
+          max_kelvin: 3700
+          min_mireds: "{{ (1000000 / 3700) | int }}"
+          max_mireds: "{{ (1000000 / 2200) | int }}"
+          
+      - name: "Kitchen Island Config"
+        unique_id: kitchen_island_config
+        state: "configured"
+        attributes:
+          min_brightness: 15
+          max_brightness: 100
+          min_kelvin: 2700
+          max_kelvin: 3700
+          min_mireds: "{{ (1000000 / 3700) | int }}"
+          max_mireds: "{{ (1000000 / 2700) | int }}"
+          
+      - name: "Bedroom Primary Config"
+        unique_id: bedroom_primary_config
+        state: "configured"
+        attributes:
+          min_brightness: 15
+          max_brightness: 80
+          min_kelvin: 1800
+          max_kelvin: 3700
+          min_mireds: "{{ (1000000 / 3700) | int }}"
+          max_mireds: "{{ (1000000 / 1800) | int }}"
+          
+      - name: "Accent Spots Config"
+        unique_id: accent_spots_config
+        state: "configured"
+        attributes:
+          min_brightness: 5
+          max_brightness: 60
+          min_kelvin: 2200
+          max_kelvin: 3200
+          min_mireds: "{{ (1000000 / 3200) | int }}"
+          max_mireds: "{{ (1000000 / 2200) | int }}"
+          
+      - name: "Recessed Ceiling Config"
+        unique_id: recessed_ceiling_config
+        state: "configured"
+        attributes:
+          min_brightness: 2
+          max_brightness: 35
+          min_kelvin: 1800
+          max_kelvin: 5000
+          min_mireds: "{{ (1000000 / 5000) | int }}"
+          max_mireds: "{{ (1000000 / 1800) | int }}"
+
+# Helper scripts for zone control
+script:
+  set_zone_brightness_range:
+    alias: "Set Zone Brightness Range"
+    mode: single
+    fields:
+      zone_id:
+        description: "Zone ID"
+        example: "main_living"
+      min_brightness:
+        description: "Minimum brightness (0-255)"
+        example: 30
+      max_brightness:
+        description: "Maximum brightness (0-255)"
+        example: 100
+    sequence:
+      - service: lighting_manager.set_layer
+        data:
+          zone_id: "{{ zone_id }}"
+          layer_id: "adaptive"
+          layer_name: "Adaptive"
+          priority: 30
+          brightness: >
+            {% set sun_elevation = state_attr('sun.sun', 'elevation') | float(0) %}
+            {% if sun_elevation < -6 %}
+              {{ min_brightness }}
+            {% elif sun_elevation > 10 %}
+              {{ max_brightness }}
+            {% else %}
+              {{ (min_brightness + (max_brightness - min_brightness) * ((sun_elevation + 6) / 16)) | int }}
+            {% endif %}
+          
+  set_zone_color_range:
+    alias: "Set Zone Color Temperature Range"
+    mode: single
+    fields:
+      zone_id:
+        description: "Zone ID"
+        example: "main_living"
+      min_kelvin:
+        description: "Minimum color temperature in Kelvin"
+        example: 2200
+      max_kelvin:
+        description: "Maximum color temperature in Kelvin"
+        example: 3700
+    sequence:
+      - service: lighting_manager.set_layer
+        data:
+          zone_id: "{{ zone_id }}"
+          layer_id: "adaptive"
+          layer_name: "Adaptive"
+          priority: 30
+          color_temp: >
+            {% set sun_elevation = state_attr('sun.sun', 'elevation') | float(0) %}
+            {% if sun_elevation < -6 %}
+              {{ (1000000 / min_kelvin) | int }}
+            {% elif sun_elevation > 10 %}
+              {{ (1000000 / max_kelvin) | int }}
+            {% else %}
+              {% set k = min_kelvin + (max_kelvin - min_kelvin) * ((sun_elevation + 6) / 16) %}
+              {{ (1000000 / k) | int }}
+            {% endif %}

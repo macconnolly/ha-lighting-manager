@@ -1,0 +1,331 @@
+# Lighting Manager Zone Setup Script
+# 
+# Instructions:
+# 1. First install the Lighting Manager integration via HACS or manually
+# 2. Add zones through the UI (Settings -> Integrations -> Lighting Manager -> Add Zone)
+#    - Use the zone_id values below as the Zone Name
+#    - Select the appropriate lights for each zone
+# 3. Include this file in your configuration.yaml:
+#    homeassistant:
+#      packages:
+#        lighting_zones: !include setup_zones.yaml
+# 4. Restart Home Assistant
+
+# Zone configuration with your specified values
+script:
+  setup_lighting_zones:
+    alias: "Setup All Lighting Zones"
+    mode: single
+    sequence:
+      - variables:
+          zones:
+            - zone_id: "main_living"
+              zone_name: "Main Living Room"
+              base_min_b: 30
+              base_max_b: 100
+              base_min_k: 2200
+              base_max_k: 3700
+              
+            - zone_id: "kitchen_island"
+              zone_name: "Kitchen Island"
+              base_min_b: 15
+              base_max_b: 100
+              base_min_k: 2700
+              base_max_k: 3700
+              
+            - zone_id: "bedroom_primary"
+              zone_name: "Primary Bedroom"
+              base_min_b: 15
+              base_max_b: 80
+              base_min_k: 1800
+              base_max_k: 3700
+              
+            - zone_id: "accent_spots"
+              zone_name: "Accent Spots"
+              base_min_b: 5
+              base_max_b: 60
+              base_min_k: 2200
+              base_max_k: 3200
+              
+            - zone_id: "recessed_ceiling"
+              zone_name: "Recessed Ceiling"
+              base_min_b: 2
+              base_max_b: 35
+              base_min_k: 1800
+              base_max_k: 5000
+      
+      - repeat:
+          for_each: "{{ zones }}"
+          sequence:
+            # Create adaptive layer with proper brightness range
+            - service: lighting_manager.set_layer
+              data:
+                zone_id: "{{ repeat.item.zone_id }}"
+                layer_id: "adaptive"
+                layer_name: "Adaptive"
+                layer_type: "absolute"
+                priority: 30
+                brightness: >
+                  {% set sun_elevation = state_attr('sun.sun', 'elevation') | float(0) %}
+                  {% set min_b = repeat.item.base_min_b %}
+                  {% set max_b = repeat.item.base_max_b %}
+                  {% if sun_elevation < -6 %}
+                    {{ (min_b * 255 / 100) | int }}
+                  {% elif sun_elevation > 10 %}
+                    {{ (max_b * 255 / 100) | int }}
+                  {% else %}
+                    {{ ((min_b + (max_b - min_b) * ((sun_elevation + 6) / 16)) * 255 / 100) | int }}
+                  {% endif %}
+                color_temp: >
+                  {% set sun_elevation = state_attr('sun.sun', 'elevation') | float(0) %}
+                  {% set min_k = repeat.item.base_min_k %}
+                  {% set max_k = repeat.item.base_max_k %}
+                  {% if sun_elevation < -6 %}
+                    {{ (1000000 / min_k) | int }}
+                  {% elif sun_elevation > 10 %}
+                    {{ (1000000 / max_k) | int }}
+                  {% else %}
+                    {% set k = min_k + (max_k - min_k) * ((sun_elevation + 6) / 16) %}
+                    {{ (1000000 / k) | int }}
+                  {% endif %}
+                transition: 30
+              continue_on_error: true
+            
+            # Create manual control layer
+            - service: lighting_manager.set_layer
+              data:
+                zone_id: "{{ repeat.item.zone_id }}"
+                layer_id: "manual"
+                layer_name: "Manual"
+                layer_type: "absolute"
+                priority: 50
+                brightness: "{{ (repeat.item.base_max_b * 255 / 100) | int }}"
+                color_temp: "{{ (1000000 / ((repeat.item.base_min_k + repeat.item.base_max_k) / 2)) | int }}"
+                transition: 2
+              continue_on_error: true
+            
+            # Turn on adaptive by default, manual off
+            - service: switch.turn_on
+              target:
+                entity_id: "switch.{{ repeat.item.zone_id }}_adaptive_layer"
+              continue_on_error: true
+              
+            - service: switch.turn_off
+              target:
+                entity_id: "switch.{{ repeat.item.zone_id }}_manual_layer"
+              continue_on_error: true
+            
+            - delay:
+                milliseconds: 500
+      
+      - service: notify.persistent_notification
+        data:
+          title: "Lighting Zones Configured"
+          message: "All 5 lighting zones have been configured with their base settings."
+
+# Automation to run setup on startup
+automation:
+  - alias: "Lighting: Auto-Setup Zones on Startup"
+    id: lighting_auto_setup_zones
+    description: "Automatically configure zones when Home Assistant starts"
+    
+    trigger:
+      - platform: homeassistant
+        event: start
+    
+    action:
+      # Wait for everything to load
+      - delay:
+          seconds: 30
+      
+      # Run the setup script
+      - service: script.setup_lighting_zones
+
+  - alias: "Lighting: Update Adaptive Values"
+    id: lighting_update_adaptive_values
+    description: "Keep adaptive layers updated with sun position"
+    mode: single
+    
+    trigger:
+      # Update when sun elevation changes significantly
+      - platform: state
+        entity_id: sun.sun
+        attribute: elevation
+      # Also update every 10 minutes
+      - platform: time_pattern
+        minutes: "/10"
+    
+    variables:
+      zones:
+        - zone_id: "main_living"
+          base_min_b: 30
+          base_max_b: 100
+          base_min_k: 2200
+          base_max_k: 3700
+        - zone_id: "kitchen_island"
+          base_min_b: 15
+          base_max_b: 100
+          base_min_k: 2700
+          base_max_k: 3700
+        - zone_id: "bedroom_primary"
+          base_min_b: 15
+          base_max_b: 80
+          base_min_k: 1800
+          base_max_k: 3700
+        - zone_id: "accent_spots"
+          base_min_b: 5
+          base_max_b: 60
+          base_min_k: 2200
+          base_max_k: 3200
+        - zone_id: "recessed_ceiling"
+          base_min_b: 2
+          base_max_b: 35
+          base_min_k: 1800
+          base_max_k: 5000
+    
+    action:
+      - repeat:
+          for_each: "{{ zones }}"
+          sequence:
+            # Only update if adaptive layer is on
+            - condition: state
+              entity_id: "switch.{{ repeat.item.zone_id }}_adaptive_layer"
+              state: "on"
+            
+            - service: lighting_manager.set_layer
+              data:
+                zone_id: "{{ repeat.item.zone_id }}"
+                layer_id: "adaptive"
+                layer_name: "Adaptive"
+                layer_type: "absolute"
+                priority: 30
+                brightness: >
+                  {% set sun_elevation = state_attr('sun.sun', 'elevation') | float(0) %}
+                  {% set min_b = repeat.item.base_min_b %}
+                  {% set max_b = repeat.item.base_max_b %}
+                  {% if sun_elevation < -6 %}
+                    {{ (min_b * 255 / 100) | int }}
+                  {% elif sun_elevation > 10 %}
+                    {{ (max_b * 255 / 100) | int }}
+                  {% else %}
+                    {{ ((min_b + (max_b - min_b) * ((sun_elevation + 6) / 16)) * 255 / 100) | int }}
+                  {% endif %}
+                color_temp: >
+                  {% set sun_elevation = state_attr('sun.sun', 'elevation') | float(0) %}
+                  {% set min_k = repeat.item.base_min_k %}
+                  {% set max_k = repeat.item.base_max_k %}
+                  {% if sun_elevation < -6 %}
+                    {{ (1000000 / min_k) | int }}
+                  {% elif sun_elevation > 10 %}
+                    {{ (1000000 / max_k) | int }}
+                  {% else %}
+                    {% set k = min_k + (max_k - min_k) * ((sun_elevation + 6) / 16) %}
+                    {{ (1000000 / k) | int }}
+                  {% endif %}
+                transition: 60  # Smooth 1-minute transition
+              continue_on_error: true
+
+# Helper scripts for manual control
+script:
+  all_zones_manual:
+    alias: "All Zones to Manual"
+    sequence:
+      - service: switch.turn_off
+        target:
+          entity_id:
+            - switch.main_living_adaptive_layer
+            - switch.kitchen_island_adaptive_layer
+            - switch.bedroom_primary_adaptive_layer
+            - switch.accent_spots_adaptive_layer
+            - switch.recessed_ceiling_adaptive_layer
+      - service: switch.turn_on
+        target:
+          entity_id:
+            - switch.main_living_manual_layer
+            - switch.kitchen_island_manual_layer
+            - switch.bedroom_primary_manual_layer
+            - switch.accent_spots_manual_layer
+            - switch.recessed_ceiling_manual_layer
+  
+  all_zones_adaptive:
+    alias: "All Zones to Adaptive"
+    sequence:
+      - service: switch.turn_off
+        target:
+          entity_id:
+            - switch.main_living_manual_layer
+            - switch.kitchen_island_manual_layer
+            - switch.bedroom_primary_manual_layer
+            - switch.accent_spots_manual_layer
+            - switch.recessed_ceiling_manual_layer
+      - service: switch.turn_on
+        target:
+          entity_id:
+            - switch.main_living_adaptive_layer
+            - switch.kitchen_island_adaptive_layer
+            - switch.bedroom_primary_adaptive_layer
+            - switch.accent_spots_adaptive_layer
+            - switch.recessed_ceiling_adaptive_layer
+
+# Template sensors to expose current configuration
+template:
+  - sensor:
+      - name: "Zone Configurations"
+        unique_id: zone_configurations
+        state: "{{ now().timestamp() | timestamp_custom('%H:%M') }}"
+        attributes:
+          main_living:
+            min_brightness_pct: 30
+            max_brightness_pct: 100
+            min_kelvin: 2200
+            max_kelvin: 3700
+            current_brightness: >
+              {% if is_state('switch.main_living_adaptive_layer', 'on') %}
+                {% set sun_elevation = state_attr('sun.sun', 'elevation') | float(0) %}
+                {% if sun_elevation < -6 %}
+                  30
+                {% elif sun_elevation > 10 %}
+                  100
+                {% else %}
+                  {{ (30 + 70 * ((sun_elevation + 6) / 16)) | int }}
+                {% endif %}
+              {% else %}
+                100
+              {% endif %}
+            current_kelvin: >
+              {% if is_state('switch.main_living_adaptive_layer', 'on') %}
+                {% set sun_elevation = state_attr('sun.sun', 'elevation') | float(0) %}
+                {% if sun_elevation < -6 %}
+                  2200
+                {% elif sun_elevation > 10 %}
+                  3700
+                {% else %}
+                  {{ (2200 + 1500 * ((sun_elevation + 6) / 16)) | int }}
+                {% endif %}
+              {% else %}
+                2950
+              {% endif %}
+              
+          kitchen_island:
+            min_brightness_pct: 15
+            max_brightness_pct: 100
+            min_kelvin: 2700
+            max_kelvin: 3700
+            
+          bedroom_primary:
+            min_brightness_pct: 15
+            max_brightness_pct: 80
+            min_kelvin: 1800
+            max_kelvin: 3700
+            
+          accent_spots:
+            min_brightness_pct: 5
+            max_brightness_pct: 60
+            min_kelvin: 2200
+            max_kelvin: 3200
+            
+          recessed_ceiling:
+            min_brightness_pct: 2
+            max_brightness_pct: 35
+            min_kelvin: 1800
+            max_kelvin: 5000

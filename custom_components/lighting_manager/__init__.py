@@ -108,7 +108,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         
         # Unregister services if this was the last zone
         if not hass.data[DOMAIN]:
-            hass.services.async_remove(DOMAIN, "create_layer")
+            from .services import unload_services
+            unload_services(hass)
             hass.data.pop(DOMAIN)
     
     return unload_ok
