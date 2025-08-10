@@ -93,6 +93,13 @@ automation:
     mode: single
     
     trigger:
+      # Wait for system ready
+      - platform: state
+        entity_id: input_boolean.lighting_manager_ready
+        to: "on"
+        variables:
+          trigger_type: startup
+      
       # React to weather changes
       - platform: state
         entity_id: weather.home
@@ -118,13 +125,19 @@ automation:
         variables:
           trigger_type: refresh
     
+    condition:
+      # System must be ready
+      - condition: state
+        entity_id: input_boolean.lighting_manager_ready
+        state: "on"
+    
     variables:
       impact_score: "{{ states('sensor.lighting_weather_impact') | int }}"
       needs_modifier: "{{ state_attr('sensor.lighting_weather_impact', 'requires_modifier') }}"
       brightness_delta: "{{ state_attr('sensor.lighting_weather_impact', 'brightness_delta') | int }}"
       color_delta: "{{ state_attr('sensor.lighting_weather_impact', 'color_temp_delta') | int }}"
     
-    condition:
+    action:
       # Skip nighttime refresh unless significant weather
       - or:
           - "{{ trigger_type != 'refresh' }}"
@@ -198,6 +211,10 @@ automation:
     mode: single
     
     trigger:
+      # Wait for system ready
+      - platform: state
+        entity_id: input_boolean.lighting_manager_ready
+        to: "on"
       - platform: state
         entity_id: weather.home
         to:
@@ -205,6 +222,12 @@ automation:
           - lightning-rainy
           - hail
           - exceptional
+    
+    condition:
+      # System must be ready
+      - condition: state
+        entity_id: input_boolean.lighting_manager_ready
+        state: "on"
     
     action:
       # Apply high-priority safety lighting

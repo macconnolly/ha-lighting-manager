@@ -111,6 +111,13 @@ automation:
     mode: restart
     
     trigger:
+      # System ready signal
+      - platform: state
+        entity_id: input_boolean.lighting_manager_ready
+        to: "on"
+        variables:
+          trigger_type: startup
+      
       # Phase changes
       - platform: state
         entity_id: sensor.circadian_lighting_phase
@@ -125,6 +132,10 @@ automation:
       
     
     condition:
+      # Must be ready
+      - condition: state
+        entity_id: input_boolean.lighting_manager_ready
+        state: "on"
       - condition: state
         entity_id: input_boolean.circadian_lighting
         state: "on"

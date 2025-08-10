@@ -127,8 +127,18 @@ automation:
     mode: restart
     
     trigger:
+      # Wait for system ready
+      - platform: state
+        entity_id: input_boolean.lighting_manager_ready
+        to: "on"
       - platform: state
         entity_id: input_select.home_mode
+    
+    condition:
+      # System must be ready
+      - condition: state
+        entity_id: input_boolean.lighting_manager_ready
+        state: "on"
     
     variables:
       mode: "{{ states('input_select.home_mode') }}"
@@ -200,8 +210,18 @@ automation:
     mode: restart
     
     trigger:
+      # Wait for system ready
+      - platform: state
+        entity_id: input_boolean.lighting_manager_ready
+        to: "on"
       - platform: state
         entity_id: input_select.activity_mode
+    
+    condition:
+      # System must be ready
+      - condition: state
+        entity_id: input_boolean.lighting_manager_ready
+        state: "on"
     
     variables:
       activity: "{{ states('input_select.activity_mode') }}"

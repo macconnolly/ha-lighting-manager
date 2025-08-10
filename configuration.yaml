@@ -1,111 +1,20 @@
-default_config:
-  
+# Minimal Home Assistant configuration.yaml for Lighting Manager
+# Place this in your /config/configuration.yaml
+
 homeassistant:
-  packages: !include_dir_named packages
-  allowlist_external_dirs:
-    - /config/www/bubble
-
-# Setup the custom dashboard
-lovelace:
-  mode: yaml
-  resources:
-    - url: /hacsfiles/Bubble-Card/bubble-card.js
-      type: module
-    - url: /hacsfiles/lovelace-auto-entities/auto-entities.js
-      type: module
-    - url: /hacsfiles/custom-sonos-card/custom-sonos-card.js
-      type: module      
-    - url: /hacsfiles/lovelace-mushroom/mushroom.js
-      type: module
-    - url: /hacsfiles/lovelace-layout-card/layout-card.js
-      type: module
-    - url: /hacsfiles/community/vertical-stack-in-card/vertical-stack-in-card.js
-      type: js
-    - url: /hacsfiles/community/stack-in-card/stack-in-card.js
-      type: module
-    - url: /hacsfiles/lovelace-card-mod/card-mod.js
-      type: module
-    - url: /hacsfiles/lovelace-auto-entities/auto-entities.js
-      type: module
-    - url: /hacsfiles/streamline-card/streamline-card.js
-      type: module      
-    - url: /hacsfiles/lovelace-multiple-entity-row/multiple-entity-row.js
-      type: module      
-    - url: https://cdn.jsdelivr.net/gh/bramkragten/custom-ui@master/swipe-card/swipe-card.js
-      type: module
-    - url: /local/custom_fonts.css
-      type: css
-
-  dashboards:
-    adaptive-living:
-      mode: yaml
-      title: Adaptive Living
-      icon: mdi:home-automation
-      show_in_sidebar: true
-      filename: /dashboards/lovelace_bubble_dashboard.yaml
-
-    test-dash:
-      mode: yaml
-      title: Test Dash
-      icon: mdi:home-automation
-      show_in_sidebar: true
-      filename: dashboards/templates/home_center_dashboard.yaml
-      
-    lighting-manager:
-      mode: yaml
-      title: Lighting Control
-      icon: mdi:lightbulb-group
-      show_in_sidebar: true
-      filename: dashboards/lighting_manager_dashboard.yaml
-
-template:
-  - trigger:
-      - trigger: event
-        event_type: bubble_card_update_modules
-    sensor:
-      - name: "Bubble Card Modules"
-        state: "saved"
-        icon: "mdi:puzzle"
-        attributes:
-          modules: "{{ trigger.event.data.modules }}"
-          last_updated: "{{ trigger.event.data.last_updated }}"
-
-# Logger Configuration - Updated for Lighting Manager
-logger:
-  default: warn
-  logs:
-    homeassistant.components.core: debug
-    homeassistant.components.script: debug
-    homeassistant.components.automation: debug
-    homeassistant.components.blueprint: debug
-    homeassistant.loader: debug
-    homeassistant.setup: debug
-    custom_components.lighting_manager: debug  # Set to debug for troubleshooting
-    custom_components.lighting_: info
-
-
-# Enable History and Recorder
-history:
-recorder:
-
-# Scenes
-scene: !include_dir_merge_list scenes/
-
-# Groups
-group: !include_dir_merge_named groups/
-
-# Standard UI-managed automations
-automation: !include automations.yaml
-
-# Your manually managed automations (merged into the main list)
-automation manual: !include_dir_merge_list automations_manual/
-
-nest:
-  client_id: 1057193467236-d9r2ljig6897uq3hdi60l0q9qouu2d31.apps.googleusercontent.com
-  client_secret: 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
-  project_id: e9b8dd64-ff2d-4398-a59c-2f8d063e61d7
-
-api:
-
-frontend:
-  themes: !include_dir_merge_named themes
+  # Include all the modifier packages
+  packages:
+    # IMPORTANT: Load startup coordinator first
+    lighting_startup: !include packages/lighting_startup_delay.yaml
+    
+    # Zone configuration (creates adaptive base layers)
+    lighting_zones: !include packages/lighting_zones_auto_setup.yaml
+    
+    # Then load all modifier packages
+    lighting_weather: !include packages/lighting_modifier_weather.yaml
+    lighting_circadian: !include packages/lighting_modifier_circadian.yaml
+    lighting_activities: !include packages/lighting_modifier_activities.yaml
+    lighting_motion: !include packages/lighting_modifier_motion.yaml
+    lighting_presence: !include packages/lighting_modifier_presence.yaml
+    lighting_overrides: !include packages/lighting_modifier_manual_override.yaml
+    lighting_climate: !include packages/lighting_modifier_climate.yaml
