@@ -18,13 +18,19 @@ from homeassistant.util import slugify
 
 from .const import (
     ATTR_BRIGHTNESS,
+    ATTR_BRIGHTNESS_FACTOR,
+    ATTR_BRIGHTNESS_PCT_DELTA,
     ATTR_COLOR_TEMP,
+    ATTR_COLOR_TEMP_FACTOR,
+    ATTR_COLOR_TEMP_KELVIN_DELTA,
     ATTR_CONDITIONS,
     ATTR_CREATED_AT,
+    ATTR_EXPIRES_AT,
     ATTR_FORCE,
     ATTR_IS_ON,
     ATTR_LAST_MODIFIED,
     ATTR_LAYER_NAME,
+    ATTR_LAYER_TYPE,
     ATTR_LOCKED,
     ATTR_PRIORITY,
     ATTR_RGB_COLOR,
@@ -36,6 +42,9 @@ from .const import (
     EVENT_LAYER_ACTIVATED,
     EVENT_LAYER_DEACTIVATED,
     EVENT_LAYER_REMOVED,
+    LAYER_TYPE_ABSOLUTE,
+    LAYER_TYPE_MODIFIER,
+    LAYER_TYPE_MULTIPLIER,
     MANUFACTURER,
     MODEL,
     SW_VERSION,
@@ -170,13 +179,22 @@ class LayerSwitch(CoordinatorEntity[ZoneCoordinator], SwitchEntity):
             "layer_id": self.layer_id,
         }
         
-        # Add all layer data fields
-        for key in [
+        # Define all possible attributes to expose
+        # This makes it easy to add/remove attributes in the future
+        attribute_keys = [
             ATTR_LAYER_NAME,
             ATTR_PRIORITY,
+            ATTR_LAYER_TYPE,  # Add layer type (absolute/modifier)
+            # Absolute layer attributes
             ATTR_BRIGHTNESS,
             ATTR_COLOR_TEMP,
             ATTR_RGB_COLOR,
+            # Modifier layer attributes
+            ATTR_BRIGHTNESS_PCT_DELTA,
+            ATTR_COLOR_TEMP_KELVIN_DELTA,
+            ATTR_BRIGHTNESS_FACTOR,
+            ATTR_COLOR_TEMP_FACTOR,
+            # Common attributes
             ATTR_TRANSITION,
             ATTR_FORCE,
             ATTR_LOCKED,
@@ -184,19 +202,32 @@ class LayerSwitch(CoordinatorEntity[ZoneCoordinator], SwitchEntity):
             ATTR_SOURCE,
             ATTR_CREATED_AT,
             ATTR_LAST_MODIFIED,
-        ]:
+            ATTR_EXPIRES_AT,  # Add expiration timestamp
+        ]
+        
+        for key in attribute_keys:
             if key in layer_data:
                 value = layer_data[key]
-                # Convert datetime objects to ISO format for display
-                if key in [ATTR_CREATED_AT, ATTR_LAST_MODIFIED]:
+                # Convert datetime objects to ISO format for HA frontend
+                if key in [ATTR_CREATED_AT, ATTR_LAST_MODIFIED, ATTR_EXPIRES_AT]:
                     if hasattr(value, 'isoformat'):
                         value = value.isoformat()
                 attrs[key] = value
         
-        # Add any extra attributes not in standard set
+        # Add any extra non-standard attributes from the layer
+        # (excluding is_on which is represented by the switch state)
         for key, value in layer_data.items():
-            if key not in attrs and key != ATTR_IS_ON:
+            if key not in attrs and key != ATTR_IS_ON and key not in attribute_keys:
+                # Handle datetime conversion for any additional datetime fields
+                if hasattr(value, 'isoformat'):
+                    value = value.isoformat()
                 attrs[key] = value
+        
+        # Add computed attributes for better UX
+        if ATTR_EXPIRES_AT in attrs:
+            # Add a human-readable time remaining
+            # (HA frontend will handle relative time display automatically)
+            pass  # Let HA handle the display format
         
         return attrs
 
@@ -262,6 +293,50 @@ class LayerSwitch(CoordinatorEntity[ZoneCoordinator], SwitchEntity):
                 },
             )
             _LOGGER.debug("Deactivated layer %s", self.entity_id)
+
+    @property
+    def icon(self) -> str | None:
+        """Return icon based on layer state and type.
+        
+        Visual indicators:
+        - Absolute layers: mdi:layers
+        - Modifier layers: mdi:layers-plus
+        - Multiplier layers: mdi:layers-triple
+        - Locked state: Adds lock overlay
+        - Off state: Uses outline version
+        """
+        layer_data = self.coordinator.data.get("layers", {}).get(self.layer_id, {})
+        layer_type = layer_data.get(ATTR_LAYER_TYPE, LAYER_TYPE_ABSOLUTE)
+        is_locked = layer_data.get(ATTR_LOCKED, False)
+        is_forced = layer_data.get(ATTR_FORCE, False)
+        
+        # Determine base icon based on layer type
+        if layer_type == LAYER_TYPE_MODIFIER:
+            base_icon = "layers-plus"
+        elif layer_type == LAYER_TYPE_MULTIPLIER:
+            base_icon = "layers-triple"
+        else:  # LAYER_TYPE_ABSOLUTE or unknown
+            base_icon = "layers"
+        
+        # Build the full icon name
+        if self.is_on:
+            if is_forced:
+                # Force flag gets special attention
+                return f"mdi:{base_icon}"
+            elif is_locked:
+                # Locked layers show lock
+                return f"mdi:lock"
+            else:
+                # Normal on state
+                return f"mdi:{base_icon}"
+        else:
+            # Off state uses outline version
+            if layer_type == LAYER_TYPE_MODIFIER:
+                return "mdi:layers-outline"
+            elif layer_type == LAYER_TYPE_MULTIPLIER:
+                return "mdi:layers-triple-outline"
+            else:
+                return "mdi:layers-off-outline"
 
     async def async_will_remove_from_hass(self) -> None:
         """Clean up when entity is being removed."""

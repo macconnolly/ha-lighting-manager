@@ -268,6 +268,20 @@ class ZoneStatusSensor(LightingManagerSensorBase):
             # Truncate error message to prevent attribute bloat
             attrs["error_message"] = error[:200] if len(error) > 200 else error
         
+        # Add applied modifiers info (Phase 4 enhancement)
+        applied_modifiers = self.coordinator.data.get("applied_modifiers", [])
+        if applied_modifiers:
+            # Show which modifiers are being applied
+            attrs["applied_modifiers"] = [
+                {
+                    "name": mod.get("name", "Unknown"),
+                    "type": mod.get("type", "modifier"),
+                    "priority": mod.get("priority", 0),
+                }
+                for mod in applied_modifiers
+            ]
+            attrs["modifier_count"] = len(applied_modifiers)
+        
         # Add winning reason with more detail
         winning_layer = self.coordinator.data.get("winning_layer")
         if winning_layer and winning_layer in self.coordinator.layers:
@@ -292,6 +306,10 @@ class ZoneStatusSensor(LightingManagerSensorBase):
                     attrs["winning_reason"] = f"{layer_name} wins with priority {priority}"
             else:
                 attrs["winning_reason"] = f"Only {layer_name} is active"
+            
+            # Add modifier detail if any are applied
+            if applied_modifiers:
+                attrs["winning_reason"] += f" + {len(applied_modifiers)} modifier(s)"
         
         # Add zone configuration summary
         attrs["total_layers"] = len(self.coordinator.layers)
