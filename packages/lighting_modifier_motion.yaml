@@ -1,0 +1,300 @@
+# Motion-Triggered Lighting Modifiers
+# Intelligent motion-based lighting adjustments using modifier layers
+#
+# Features:
+# - Time-aware brightness adjustments
+# - Zone-specific motion responses
+# - Occupancy tracking with gradual dimming
+# - Path lighting for nighttime navigation
+
+input_number:
+  motion_brightness_day:
+    name: Motion Brightness Day
+    min: 0
+    max: 50
+    step: 5
+    initial: 15
+    unit_of_measurement: "%"
+    icon: mdi:motion-sensor
+    
+  motion_brightness_night:
+    name: Motion Brightness Night
+    min: -30
+    max: 30
+    step: 5
+    initial: -10
+    unit_of_measurement: "%"
+    icon: mdi:motion-sensor-off
+    
+  motion_timeout_minutes:
+    name: Motion Timeout
+    min: 1
+    max: 60
+    step: 1
+    initial: 5
+    unit_of_measurement: "min"
+    icon: mdi:timer-outline
+
+template:
+  - sensor:
+      - name: "Motion Lighting Parameters"
+        unique_id: motion_lighting_parameters
+        state: >
+          {% set hour = now().hour %}
+          {% if 6 <= hour < 20 %}
+            day
+          {% else %}
+            night
+          {% endif %}
+        attributes:
+          brightness_modifier: >
+            {% set hour = now().hour %}
+            {% if 6 <= hour < 20 %}
+              {{ states('input_number.motion_brightness_day') | int }}
+            {% else %}
+              {{ states('input_number.motion_brightness_night') | int }}
+            {% endif %}
+          
+          color_temp_modifier: >
+            {% set hour = now().hour %}
+            {% if 22 <= hour or hour < 6 %}
+              -400  # Very warm at night
+            {% elif 6 <= hour < 8 %}
+              -200  # Warm morning
+            {% elif 20 <= hour < 22 %}
+              -300  # Warm evening
+            {% else %}
+              0     # Neutral during day
+            {% endif %}
+          
+          timeout_minutes: "{{ states('input_number.motion_timeout_minutes') | int }}"
+          
+          priority: >
+            {% set hour = now().hour %}
+            {% if 22 <= hour or hour < 6 %}
+              70  # Higher priority at night for safety
+            {% else %}
+              55  # Normal priority during day
+            {% endif %}
+          
+          transition_time: >
+            {% set hour = now().hour %}
+            {% if 22 <= hour or hour < 6 %}
+              0.5  # Quick response at night
+            {% else %}
+              2    # Smooth transition during day
+            {% endif %}
+
+automation:
+  - alias: "Lighting: Motion Response Controller"
+    id: lighting_motion_response_controller
+    description: "Apply lighting modifiers when motion detected"
+    mode: parallel
+    max: 10
+    
+    trigger:
+      - platform: state
+        entity_id:
+          - binary_sensor.kitchen_motion
+          - binary_sensor.hallway_motion
+          - binary_sensor.bathroom_motion
+          - binary_sensor.garage_motion
+          - binary_sensor.basement_motion
+        to: "on"
+    
+    variables:
+      motion_sensor: "{{ trigger.entity_id }}"
+      zone_name: >
+        {% set sensor_name = motion_sensor.split('.')[-1] %}
+        {{ sensor_name.replace('_motion', '') }}
+      brightness_mod: "{{ state_attr('sensor.motion_lighting_parameters', 'brightness_modifier') | int }}"
+      color_mod: "{{ state_attr('sensor.motion_lighting_parameters', 'color_temp_modifier') | int }}"
+      timeout: "{{ state_attr('sensor.motion_lighting_parameters', 'timeout_minutes') | int }}"
+      priority: "{{ state_attr('sensor.motion_lighting_parameters', 'priority') | int }}"
+      transition: "{{ state_attr('sensor.motion_lighting_parameters', 'transition_time') | float }}"
+    
+    action:
+      - service: lighting_manager.set_layer
+        data:
+          zone_id: "{{ zone_name }}"
+          layer_id: "motion_boost"
+          layer_name: "Motion Detected"
+          layer_type: "modifier"
+          priority: "{{ priority }}"
+          brightness_pct_delta: "{{ brightness_mod }}"
+          color_temp_kelvin_delta: "{{ color_mod }}"
+          transition: "{{ transition }}"
+          timeout_minutes: "{{ timeout }}"
+      
+      - service: switch.turn_on
+        target:
+          entity_id: "switch.{{ zone_name }}_motion_boost_layer"
+        continue_on_error: true
+
+  - alias: "Lighting: Occupancy-Based Dimming"
+    id: lighting_occupancy_based_dimming
+    description: "Gradually dim lights when no motion detected"
+    mode: restart
+    
+    trigger:
+      - platform: state
+        entity_id:
+          - binary_sensor.living_room_occupancy
+          - binary_sensor.office_occupancy
+          - binary_sensor.bedroom_occupancy
+        to: "off"
+        for:
+          minutes: 5
+    
+    variables:
+      occupancy_sensor: "{{ trigger.entity_id }}"
+      zone_name: >
+        {% set sensor_name = occupancy_sensor.split('.')[-1] %}
+        {{ sensor_name.replace('_occupancy', '').replace('_', ' ') }}
+    
+    action:
+      # Apply gradual dimming modifier
+      - service: lighting_manager.set_layer
+        data:
+          zone_id: "{{ zone_name | slugify }}"
+          layer_id: "vacancy_dim"
+          layer_name: "Vacancy Dimming"
+          layer_type: "modifier"
+          priority: 50
+          brightness_pct_delta: -30
+          transition: 60  # Slow 1-minute fade
+          timeout_minutes: 30
+      
+      - service: switch.turn_on
+        target:
+          entity_id: "switch.{{ zone_name | slugify }}_vacancy_dim_layer"
+        continue_on_error: true
+      
+      # Wait and apply deeper dim if still vacant
+      - delay:
+          minutes: 10
+      
+      - condition: state
+        entity_id: "{{ occupancy_sensor }}"
+        state: "off"
+      
+      - service: lighting_manager.set_layer
+        data:
+          zone_id: "{{ zone_name | slugify }}"
+          layer_id: "vacancy_dim"
+          layer_name: "Extended Vacancy"
+          layer_type: "modifier"
+          priority: 50
+          brightness_pct_delta: -50
+          transition: 120  # Very slow 2-minute fade
+          timeout_minutes: 60
+
+  - alias: "Lighting: Path Lighting at Night"
+    id: lighting_path_lighting_night
+    description: "Create illuminated path when motion detected at night"
+    mode: single
+    
+    trigger:
+      - platform: state
+        entity_id:
+          - binary_sensor.front_door_motion
+          - binary_sensor.stairs_motion
+        to: "on"
+    
+    condition:
+      - condition: time
+        after: "22:00:00"
+        before: "06:00:00"
+    
+    variables:
+      trigger_location: >
+        {% if 'front_door' in trigger.entity_id %}
+          entrance
+        {% elif 'stairs' in trigger.entity_id %}
+          stairs
+        {% endif %}
+      
+      path_zones: >
+        {% if trigger_location == 'entrance' %}
+          ['hallway', 'living_room', 'kitchen']
+        {% elif trigger_location == 'stairs' %}
+          ['hallway', 'landing', 'bathroom']
+        {% else %}
+          []
+        {% endif %}
+    
+    action:
+      # Illuminate path with soft light
+      - repeat:
+          for_each: "{{ path_zones }}"
+          sequence:
+            - service: lighting_manager.set_layer
+              data:
+                zone_id: "{{ repeat.item }}"
+                layer_id: "path_light"
+                layer_name: "Path Light"
+                layer_type: "modifier"
+                priority: 75
+                brightness_pct_delta: 10  # Gentle illumination
+                color_temp_kelvin_delta: -600  # Very warm for night
+                transition: 0.5  # Quick activation
+                timeout_minutes: 3  # Short duration
+            
+            - service: switch.turn_on
+              target:
+                entity_id: "switch.{{ repeat.item }}_path_light_layer"
+              continue_on_error: true
+            
+            # Stagger activation for wave effect
+            - delay:
+                milliseconds: 200
+
+  - alias: "Lighting: Activity Detection Boost"
+    id: lighting_activity_detection_boost
+    description: "Boost lighting when sustained activity detected"
+    mode: restart
+    
+    trigger:
+      - platform: state
+        entity_id:
+          - sensor.kitchen_activity_level
+          - sensor.workshop_activity_level
+          - sensor.garage_activity_level
+        attribute: count
+    
+    condition:
+      - condition: template
+        value_template: >
+          {{ trigger.to_state.attributes.count | int > 5 }}
+    
+    variables:
+      zone_name: >
+        {% set sensor_name = trigger.entity_id.split('.')[-1] %}
+        {{ sensor_name.replace('_activity_level', '') }}
+      activity_level: "{{ trigger.to_state.attributes.count | int }}"
+      brightness_boost: >
+        {% if activity_level > 20 %}
+          25
+        {% elif activity_level > 10 %}
+          15
+        {% else %}
+          8
+        {% endif %}
+    
+    action:
+      - service: lighting_manager.set_layer
+        data:
+          zone_id: "{{ zone_name }}"
+          layer_id: "activity_boost"
+          layer_name: "High Activity"
+          layer_type: "modifier"
+          priority: 60
+          brightness_pct_delta: "{{ brightness_boost }}"
+          color_temp_kelvin_delta: 200  # Cooler for alertness
+          transition: 3
+          timeout_minutes: 15
+      
+      - service: switch.turn_on
+        target:
+          entity_id: "switch.{{ zone_name }}_activity_boost_layer"
+        continue_on_error: true

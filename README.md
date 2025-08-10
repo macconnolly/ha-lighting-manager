@@ -1,11 +1,11 @@
 # Lighting Manager for Home Assistant
 
-[![Version](https://img.shields.io/badge/version-4.0.0-blue.svg)](https://github.com/yourusername/lighting_manager)
-[![Home Assistant](https://img.shields.io/badge/Home%20Assistant-2022.10%2B-green.svg)](https://www.home-assistant.io/)
+[![Version](https://img.shields.io/badge/version-5.0.0-blue.svg)](https://github.com/yourusername/lighting_manager)
+[![Home Assistant](https://img.shields.io/badge/Home%20Assistant-2024.1%2B-green.svg)](https://www.home-assistant.io/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![HACS Custom](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
 
-A professional-grade Home Assistant integration that provides **centralized state orchestration** for your lighting zones. Create multiple layers of lighting control with priority-based layering, adaptive brightness, and seamless automation integration.
+A professional-grade Home Assistant integration that provides **centralized state orchestration** for your lighting zones. Create multiple layers of lighting control with priority-based layering, adaptive brightness, seamless automation integration, and the revolutionary **modifier layer system** for dynamic lighting adjustments without configuration duplication.
 
 ## Table of Contents
 
@@ -27,6 +27,7 @@ A professional-grade Home Assistant integration that provides **centralized stat
 - **Multiple Layers**: Create unlimited lighting layers (manual, adaptive, motion, movie mode, etc.)
 - **Smart Priority**: Higher priority layers automatically override lower ones
 - **Winner-Takes-All**: Clean, predictable state with no conflicts
+- **Modifier Layers**: Apply relative adjustments (brightness boost, color shifts) that stack on top of absolute layers
 
 ### 🌅 Adaptive Lighting
 - **Sun-Synchronized**: Automatic brightness and color temperature based on sun position
@@ -353,6 +354,37 @@ External Systems → Switches → Coordinator → Calculator → Controller → 
 | **Layers per Zone** | 20+ | Tested to 30 |
 
 ## Examples
+
+### Modifier Layers (New in v5.0)
+
+Modifier layers revolutionize lighting control by applying relative adjustments instead of absolute values:
+
+```yaml
+# Weather-based brightness boost - works across ALL zones
+service: lighting_manager.set_layer
+data:
+  zone_id: "{{ repeat.item }}"  # Applied to any zone
+  layer_id: weather_boost
+  layer_name: "Cloudy Day Boost"
+  layer_type: "modifier"  # Key difference!
+  priority: 70
+  brightness_pct_delta: 20      # +20% brightness
+  color_temp_kelvin_delta: -300 # 300K warmer
+  timeout_minutes: 60            # Auto-expires
+```
+
+**Benefits of Modifier Layers:**
+- **No Configuration Duplication**: One modifier works across all zones
+- **Dynamic Stacking**: Multiple modifiers combine mathematically
+- **Temporary Overrides**: Built-in expiration support
+- **Single Source of Truth**: Change boost percentage in one place
+
+**Example Use Cases:**
+- Weather-responsive lighting (cloudy = brighter)
+- Circadian rhythm adjustments (time-based warmth)
+- Motion-triggered brightness boosts
+- Activity modes (cooking = brighter, movie = dimmer)
+- Manual overrides with auto-revert
 
 ### Basic Zone Setup
 

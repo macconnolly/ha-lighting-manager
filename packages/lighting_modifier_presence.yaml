@@ -1,0 +1,321 @@
+# Presence-Based Lighting Modifiers
+# Sophisticated presence detection and response using modifier layers
+#
+# Features:
+# - Multi-user presence tracking
+# - Room-specific presence responses
+# - Arrival/departure sequences
+# - Vacation simulation
+
+input_boolean:
+  presence_lighting_enabled:
+    name: Presence-Based Lighting
+    icon: mdi:home-account
+    initial: true
+
+template:
+  - sensor:
+      - name: "Home Presence Status"
+        unique_id: home_presence_status
+        state: >
+          {% set trackers = states.device_tracker | selectattr('state', 'eq', 'home') | list %}
+          {% set people = states.person | selectattr('state', 'eq', 'home') | list %}
+          {% set total = trackers | length + people | length %}
+          {% if total == 0 %}
+            nobody
+          {% elif total == 1 %}
+            somebody
+          {% else %}
+            multiple
+          {% endif %}
+        attributes:
+          people_home: >
+            {{ states.person | selectattr('state', 'eq', 'home') 
+               | map(attribute='attributes.friendly_name') | list }}
+          count: >
+            {{ states.person | selectattr('state', 'eq', 'home') | list | length }}
+          last_arrival: >
+            {% set arrivals = states.person | selectattr('state', 'eq', 'home') 
+               | map(attribute='last_changed') | list %}
+            {{ arrivals | max if arrivals else 'unknown' }}
+          last_departure: >
+            {% set departures = states.person | selectattr('state', 'eq', 'not_home') 
+               | map(attribute='last_changed') | list %}
+            {{ departures | max if departures else 'unknown' }}
+          
+      - name: "Presence Lighting Modifiers"
+        unique_id: presence_lighting_modifiers
+        state: "{{ states('sensor.home_presence_status') }}"
+        attributes:
+          brightness_modifier: >
+            {% set status = states('sensor.home_presence_status') %}
+            {% set hour = now().hour %}
+            
+            {% if status == 'nobody' %}
+              -40
+            {% elif status == 'somebody' %}
+              {% if 6 <= hour < 22 %}
+                0
+              {% else %}
+                -20
+              {% endif %}
+            {% else %}  # multiple people
+              10
+            {% endif %}
+          
+          color_temp_modifier: >
+            {% set status = states('sensor.home_presence_status') %}
+            {% if status == 'nobody' %}
+              0
+            {% elif status == 'multiple' %}
+              -100  # Slightly warmer for social
+            {% else %}
+              0
+            {% endif %}
+          
+          priority: >
+            {% set status = states('sensor.home_presence_status') %}
+            {% if status == 'nobody' %}
+              60
+            {% else %}
+              45
+            {% endif %}
+
+automation:
+  - alias: "Lighting: Presence-Based Control"
+    id: lighting_presence_based_control
+    description: "Adjust lighting based on who's home"
+    mode: restart
+    
+    trigger:
+      - platform: state
+        entity_id: sensor.home_presence_status
+      - platform: state
+        entity_id: input_boolean.presence_lighting_enabled
+        to: "on"
+    
+    condition:
+      - condition: state
+        entity_id: input_boolean.presence_lighting_enabled
+        state: "on"
+    
+    variables:
+      status: "{{ states('sensor.home_presence_status') }}"
+      brightness_mod: "{{ state_attr('sensor.presence_lighting_modifiers', 'brightness_modifier') | int }}"
+      color_mod: "{{ state_attr('sensor.presence_lighting_modifiers', 'color_temp_modifier') | int }}"
+      priority: "{{ state_attr('sensor.presence_lighting_modifiers', 'priority') | int }}"
+    
+    action:
+      - choose:
+          # Nobody home - energy saving mode
+          - conditions:
+              - condition: template
+                value_template: "{{ status == 'nobody' }}"
+            sequence:
+              - repeat:
+                  for_each: "{{ state_attr('sensor.lighting_manager_zones', 'zone_ids') | default([]) }}"
+                  sequence:
+                    - service: lighting_manager.set_layer
+                      data:
+                        zone_id: "{{ repeat.item }}"
+                        layer_id: "presence_modifier"
+                        layer_name: "Away Mode"
+                        layer_type: "modifier"
+                        priority: "{{ priority }}"
+                        brightness_pct_delta: "{{ brightness_mod }}"
+                        transition: 30
+                        timeout_minutes: 0
+                    
+                    - service: switch.turn_on
+                      target:
+                        entity_id: "switch.{{ repeat.item }}_presence_modifier_layer"
+                      continue_on_error: true
+          
+          # Someone home - normal lighting
+          - conditions:
+              - condition: template
+                value_template: "{{ status in ['somebody', 'multiple'] }}"
+            sequence:
+              # Remove away mode modifiers
+              - service: switch.turn_off
+                target:
+                  entity_id: >
+                    {{ expand(state_attr('sensor.lighting_manager_zones', 'zone_ids') | default([])
+                       | map('regex_replace', '(.*)', 'switch.\\1_presence_modifier_layer') | list)
+                       | selectattr('state', 'eq', 'on')
+                       | map(attribute='entity_id') | list }}
+                continue_on_error: true
+              
+              # Apply social modifiers if multiple people
+              - condition: template
+                value_template: "{{ status == 'multiple' }}"
+              
+              - repeat:
+                  for_each: >
+                    {% set all_zones = state_attr('sensor.lighting_manager_zones', 'zone_ids') | default([]) %}
+                    {{ all_zones | reject('search', 'bedroom|office') | list }}
+                  sequence:
+                    - service: lighting_manager.set_layer
+                      data:
+                        zone_id: "{{ repeat.item }}"
+                        layer_id: "social_modifier"
+                        layer_name: "Social Mode"
+                        layer_type: "modifier"
+                        priority: 48
+                        brightness_pct_delta: "{{ brightness_mod }}"
+                        color_temp_kelvin_delta: "{{ color_mod }}"
+                        transition: 5
+                        timeout_minutes: 0
+                    
+                    - service: switch.turn_on
+                      target:
+                        entity_id: "switch.{{ repeat.item }}_social_modifier_layer"
+                      continue_on_error: true
+
+  - alias: "Lighting: Arrival Sequence"
+    id: lighting_arrival_sequence
+    description: "Welcome lighting when someone arrives home"
+    mode: parallel
+    max: 5
+    
+    trigger:
+      - platform: state
+        entity_id:
+          - person.john
+          - person.jane
+          - person.guest
+        to: "home"
+    
+    variables:
+      person: "{{ trigger.to_state.attributes.friendly_name }}"
+      is_dark: "{{ state_attr('sun.sun', 'elevation') | float < 0 }}"
+      entry_zones: ['hallway', 'living_room', 'kitchen']
+    
+    condition:
+      - condition: template
+        value_template: "{{ is_dark }}"
+    
+    action:
+      # Apply welcome lighting to entry areas
+      - repeat:
+          for_each: "{{ entry_zones }}"
+          sequence:
+            - service: lighting_manager.set_layer
+              data:
+                zone_id: "{{ repeat.item }}"
+                layer_id: "arrival_welcome"
+                layer_name: "Welcome Home"
+                layer_type: "modifier"
+                priority: 65
+                brightness_pct_delta: 20
+                color_temp_kelvin_delta: -200
+                transition: 2
+                timeout_minutes: 10
+            
+            - service: switch.turn_on
+              target:
+                entity_id: "switch.{{ repeat.item }}_arrival_welcome_layer"
+              continue_on_error: true
+
+  - alias: "Lighting: Departure Sequence"
+    id: lighting_departure_sequence
+    description: "Gradual lighting reduction when last person leaves"
+    mode: single
+    
+    trigger:
+      - platform: state
+        entity_id: sensor.home_presence_status
+        to: "nobody"
+    
+    action:
+      # Stage 1: Dim common areas immediately
+      - repeat:
+          for_each: >
+            {% set all_zones = state_attr('sensor.lighting_manager_zones', 'zone_ids') | default([]) %}
+            {{ all_zones | reject('search', 'exterior|outdoor|porch') | list }}
+          sequence:
+            - service: lighting_manager.set_layer
+              data:
+                zone_id: "{{ repeat.item }}"
+                layer_id: "departure_dim"
+                layer_name: "Departure Mode"
+                layer_type: "modifier"
+                priority: 70
+                brightness_pct_delta: -30
+                transition: 10
+                timeout_minutes: 15
+            
+            - service: switch.turn_on
+              target:
+                entity_id: "switch.{{ repeat.item }}_departure_dim_layer"
+              continue_on_error: true
+      
+      # Wait 5 minutes
+      - delay:
+          minutes: 5
+      
+      # Stage 2: Further reduction if still nobody home
+      - condition: state
+        entity_id: sensor.home_presence_status
+        state: "nobody"
+      
+      - repeat:
+          for_each: >
+            {% set all_zones = state_attr('sensor.lighting_manager_zones', 'zone_ids') | default([]) %}
+            {{ all_zones | reject('search', 'exterior|outdoor|porch') | list }}
+          sequence:
+            - service: lighting_manager.set_layer
+              data:
+                zone_id: "{{ repeat.item }}"
+                layer_id: "departure_dim"
+                layer_name: "Away Mode"
+                layer_type: "modifier"
+                priority: 70
+                brightness_pct_delta: -50
+                transition: 30
+                timeout_minutes: 0
+            
+            - service: switch.turn_on
+              target:
+                entity_id: "switch.{{ repeat.item }}_departure_dim_layer"
+              continue_on_error: true
+
+  - alias: "Lighting: Vacation Simulator"
+    id: lighting_vacation_simulator
+    description: "Simulate presence when on vacation"
+    mode: single
+    
+    trigger:
+      - platform: time_pattern
+        minutes: "/30"
+    
+    condition:
+      - condition: state
+        entity_id: input_select.home_mode
+        state: "vacation"
+      - condition: time
+        after: "18:00:00"
+        before: "23:30:00"
+    
+    action:
+      # Randomly select zones to simulate activity
+      - variables:
+          all_zones: "{{ state_attr('sensor.lighting_manager_zones', 'zone_ids') | default([]) }}"
+          selected_zone: "{{ all_zones | random }}"
+          brightness_variation: "{{ range(-10, 10) | random }}"
+      
+      - service: lighting_manager.set_layer
+        data:
+          zone_id: "{{ selected_zone }}"
+          layer_id: "vacation_sim"
+          layer_name: "Vacation Simulator"
+          layer_type: "modifier"
+          priority: 55
+          brightness_pct_delta: "{{ brightness_variation }}"
+          transition: "{{ range(5, 30) | random }}"
+          timeout_minutes: "{{ range(15, 45) | random }}"
+      
+      - service: switch.turn_on
+        target:
+          entity_id: "switch.{{ selected_zone }}_vacation_sim_layer"
+        continue_on_error: true

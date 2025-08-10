@@ -1,0 +1,246 @@
+# Manual Override with Timeout Examples
+# Demonstrates temporary manual control that automatically expires
+#
+# Use cases:
+# - Temporary brightness boost for detailed tasks
+# - Guest overrides that revert after they leave
+# - Quick adjustments that shouldn't persist
+
+input_button:
+  brightness_boost_15min:
+    name: Brightness Boost (15 min)
+    icon: mdi:brightness-7
+    
+  dim_lights_30min:
+    name: Dim Lights (30 min)
+    icon: mdi:brightness-3
+    
+  warm_lights_1hr:
+    name: Warm Lights (1 hour)
+    icon: mdi:weather-sunset
+
+input_number:
+  manual_brightness_boost:
+    name: Manual Brightness Boost %
+    min: -50
+    max: 50
+    step: 5
+    initial: 0
+    icon: mdi:tune
+    
+  manual_color_temp_shift:
+    name: Manual Color Temp Shift
+    min: -1000
+    max: 1000
+    step: 100
+    initial: 0
+    unit_of_measurement: "K"
+    icon: mdi:palette
+
+automation:
+  - alias: "Lighting: Quick Brightness Boost"
+    id: lighting_quick_brightness_boost
+    description: "Apply temporary 30% brightness boost for 15 minutes"
+    
+    trigger:
+      - platform: state
+        entity_id: input_button.brightness_boost_15min
+    
+    action:
+      # Apply to all zones or specific zones based on context
+      - variables:
+          zones: >
+            {% set all_zones = state_attr('sensor.lighting_manager_zones', 'zone_ids') | default([]) %}
+            {% set active_zones = namespace(zones=[]) %}
+            {% for zone in all_zones %}
+              {% set status = states('sensor.' ~ zone ~ '_status') %}
+              {% if status not in ['unavailable', 'unknown', 'error'] %}
+                {% set active_zones.zones = active_zones.zones + [zone] %}
+              {% endif %}
+            {% endfor %}
+            {{ active_zones.zones }}
+      
+      - repeat:
+          for_each: "{{ zones }}"
+          sequence:
+            - service: lighting_manager.set_layer
+              data:
+                zone_id: "{{ repeat.item }}"
+                layer_id: "quick_boost"
+                layer_name: "Quick Boost"
+                layer_type: "modifier"
+                priority: 80  # High priority to override most layers
+                brightness_pct_delta: 30
+                transition: 1
+                timeout_minutes: 15  # Auto-expires
+            
+            - service: switch.turn_on
+              target:
+                entity_id: "switch.{{ repeat.item }}_quick_boost_layer"
+
+  - alias: "Lighting: Temporary Dim Mode"
+    id: lighting_temporary_dim_mode
+    description: "Dim lights by 40% for 30 minutes"
+    
+    trigger:
+      - platform: state
+        entity_id: input_button.dim_lights_30min
+    
+    action:
+      - repeat:
+          for_each: "{{ state_attr('sensor.lighting_manager_zones', 'zone_ids') | default([]) }}"
+          sequence:
+            - service: lighting_manager.set_layer
+              data:
+                zone_id: "{{ repeat.item }}"
+                layer_id: "temp_dim"
+                layer_name: "Temporary Dim"
+                layer_type: "modifier"
+                priority: 75
+                brightness_pct_delta: -40
+                transition: 3
+                timeout_minutes: 30
+            
+            - service: switch.turn_on
+              target:
+                entity_id: "switch.{{ repeat.item }}_temp_dim_layer"
+
+  - alias: "Lighting: Warm Override"
+    id: lighting_warm_override
+    description: "Make lights warmer for 1 hour"
+    
+    trigger:
+      - platform: state
+        entity_id: input_button.warm_lights_1hr
+    
+    action:
+      - repeat:
+          for_each: "{{ state_attr('sensor.lighting_manager_zones', 'zone_ids') | default([]) }}"
+          sequence:
+            - service: lighting_manager.set_layer
+              data:
+                zone_id: "{{ repeat.item }}"
+                layer_id: "warm_override"
+                layer_name: "Warm Override"
+                layer_type: "modifier"
+                priority: 70
+                color_temp_kelvin_delta: -500
+                transition: 5
+                timeout_minutes: 60
+            
+            - service: switch.turn_on
+              target:
+                entity_id: "switch.{{ repeat.item }}_warm_override_layer"
+
+  - alias: "Lighting: Custom Manual Override"
+    id: lighting_custom_manual_override
+    description: "Apply custom brightness/color adjustments with configurable timeout"
+    
+    trigger:
+      - platform: state
+        entity_id: 
+          - input_number.manual_brightness_boost
+          - input_number.manual_color_temp_shift
+        for:
+          seconds: 2  # Debounce slider changes
+    
+    condition:
+      - or:
+          - condition: template
+            value_template: "{{ states('input_number.manual_brightness_boost') | float != 0 }}"
+          - condition: template
+            value_template: "{{ states('input_number.manual_color_temp_shift') | float != 0 }}"
+    
+    action:
+      - variables:
+          brightness_delta: "{{ states('input_number.manual_brightness_boost') | float }}"
+          color_delta: "{{ states('input_number.manual_color_temp_shift') | float }}"
+      
+      - repeat:
+          for_each: "{{ state_attr('sensor.lighting_manager_zones', 'zone_ids') | default([]) }}"
+          sequence:
+            - choose:
+                # Apply override if values are non-zero
+                - conditions:
+                    - condition: template
+                      value_template: "{{ brightness_delta != 0 or color_delta != 0 }}"
+                  sequence:
+                    - service: lighting_manager.set_layer
+                      data:
+                        zone_id: "{{ repeat.item }}"
+                        layer_id: "manual_override"
+                        layer_name: "Manual Override"
+                        layer_type: "modifier"
+                        priority: 85
+                        brightness_pct_delta: "{{ brightness_delta if brightness_delta != 0 else omit }}"
+                        color_temp_kelvin_delta: "{{ color_delta if color_delta != 0 else omit }}"
+                        transition: 2
+                        timeout_minutes: 120  # 2 hours default
+                    
+                    - service: switch.turn_on
+                      target:
+                        entity_id: "switch.{{ repeat.item }}_manual_override_layer"
+              
+              # Remove override if both are zero
+              default:
+                - service: switch.turn_off
+                  target:
+                    entity_id: "switch.{{ repeat.item }}_manual_override_layer"
+                  continue_on_error: true
+
+  - alias: "Lighting: Guest Override"
+    id: lighting_guest_override
+    description: "Apply guest preferences that auto-expire when guest mode disabled"
+    
+    trigger:
+      - platform: state
+        entity_id: input_boolean.guest_mode
+        to: "on"
+      - platform: state
+        entity_id: input_boolean.guest_mode
+        to: "off"
+    
+    action:
+      - choose:
+          - conditions:
+              - condition: state
+                entity_id: input_boolean.guest_mode
+                state: "on"
+            sequence:
+              # Apply guest preferences (brighter, neutral color)
+              - repeat:
+                  for_each: >
+                    {% set all_zones = state_attr('sensor.lighting_manager_zones', 'zone_ids') | default([]) %}
+                    {{ all_zones | reject('search', 'bedroom|master') | list }}
+                  sequence:
+                    - service: lighting_manager.set_layer
+                      data:
+                        zone_id: "{{ repeat.item }}"
+                        layer_id: "guest_preferences"
+                        layer_name: "Guest Mode"
+                        layer_type: "modifier"
+                        priority: 65
+                        brightness_pct_delta: 15
+                        color_temp_kelvin_delta: 200
+                        transition: 3
+                        timeout_minutes: 480  # 8 hours
+                    
+                    - service: switch.turn_on
+                      target:
+                        entity_id: "switch.{{ repeat.item }}_guest_preferences_layer"
+          
+          # Remove guest overrides
+          default:
+            - service: switch.turn_off
+              target:
+                entity_id: >
+                  {{ expand(state_attr('sensor.lighting_manager_zones', 'zone_ids') | default([])
+                     | map('regex_replace', '(.*)', 'switch.\\1_guest_preferences_layer') | list)
+                     | selectattr('state', 'eq', 'on')
+                     | map(attribute='entity_id') | list }}
+              continue_on_error: true
+
+input_boolean:
+  guest_mode:
+    name: Guest Mode
+    icon: mdi:account-multiple
