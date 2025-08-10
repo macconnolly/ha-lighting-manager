@@ -1,27 +1,52 @@
 # Service definitions for Lighting Manager
 
-# Layer Creation
-create_layer:
-  name: Create Layer
-  description: Create a new layer for a zone
+# Primary Layer Service - Creates or updates layers
+set_layer:
+  name: Set Layer
+  description: Create or update a layer with specified parameters (idempotent)
   fields:
     zone_id:
       name: Zone ID
-      description: The zone to create the layer in
+      description: The zone containing the layer
       required: true
       example: "living_room"
       selector:
         text:
-    layer_name:
-      name: Layer Name
-      description: Name for the new layer
+    layer_id:
+      name: Layer ID
+      description: Unique identifier for the layer (created from layer name)
       required: true
-      example: "Movie Time"
+      example: "weather_boost"
       selector:
         text:
+    layer_name:
+      name: Layer Name
+      description: Human-readable layer name (optional, defaults to layer_id)
+      required: false
+      example: "Weather Boost"
+      selector:
+        text:
+    layer_type:
+      name: Layer Type
+      description: Type of layer - absolute provides full state, modifier transforms state
+      required: false
+      default: "absolute"
+      selector:
+        select:
+          options:
+            - "absolute"
+            - "modifier"
+            - "multiplier"
+    is_on:
+      name: Is On
+      description: Whether the layer is active
+      required: false
+      default: true
+      selector:
+        boolean:
     priority:
       name: Priority
-      description: Layer priority (0-100, higher wins)
+      description: Layer priority (0-100, higher wins for absolute, higher applies for modifiers)
       required: false
       default: 50
       selector:
@@ -29,9 +54,10 @@ create_layer:
           min: 0
           max: 100
           mode: slider
+    # Absolute layer attributes (only for layer_type: absolute)
     brightness:
       name: Brightness
-      description: Brightness level (0-255)
+      description: Brightness level (0-255) - only for absolute layers
       required: false
       selector:
         number:
@@ -39,12 +65,56 @@ create_layer:
           max: 255
     color_temp:
       name: Color Temperature
-      description: Color temperature in mireds
+      description: Color temperature in mireds - only for absolute layers
       required: false
       selector:
         number:
           min: 153
           max: 500
+    rgb_color:
+      name: RGB Color
+      description: RGB color values - only for absolute layers
+      required: false
+      selector:
+        color_rgb:
+    # Modifier layer attributes (only for layer_type: modifier/multiplier)
+    brightness_pct_delta:
+      name: Brightness Percentage Delta
+      description: Percentage change to brightness (+20 for 20% brighter) - modifier layers only
+      required: false
+      selector:
+        number:
+          min: -100
+          max: 100
+          unit_of_measurement: "%"
+    color_temp_kelvin_delta:
+      name: Color Temperature Kelvin Delta
+      description: Kelvin change to color temp (-500 for 500K warmer) - modifier layers only
+      required: false
+      selector:
+        number:
+          min: -5000
+          max: 5000
+          unit_of_measurement: "K"
+    brightness_factor:
+      name: Brightness Factor
+      description: Multiply brightness by this factor (0.5 for 50% dimmer) - modifier layers only
+      required: false
+      selector:
+        number:
+          min: 0
+          max: 2
+          step: 0.1
+    color_temp_factor:
+      name: Color Temperature Factor
+      description: Multiply color temp by this factor - modifier layers only
+      required: false
+      selector:
+        number:
+          min: 0.5
+          max: 2
+          step: 0.1
+    # Common attributes
     transition:
       name: Transition
       description: Transition time in seconds
@@ -55,8 +125,38 @@ create_layer:
           min: 0
           max: 300
           step: 0.1
+    force:
+      name: Force
+      description: Force this layer to override priorities
+      required: false
+      default: false
+      selector:
+        boolean:
+    locked:
+      name: Locked
+      description: Lock layer to prevent modifications
+      required: false
+      default: false
+      selector:
+        boolean:
+    timeout_minutes:
+      name: Timeout Minutes
+      description: Auto-remove layer after this many minutes
+      required: false
+      selector:
+        number:
+          min: 0.1
+          max: 10080
+          unit_of_measurement: "min"
+    source:
+      name: Source
+      description: What created/updated this layer
+      required: false
+      example: "automation.weather_monitor"
+      selector:
+        text:
 
-# Layer Control Services
+# Legacy Layer Control Services (kept for compatibility)
 activate_layer:
   name: Activate Layer
   description: Activate a layer with specified parameters
@@ -183,27 +283,59 @@ set_layer_priority:
 lock_layer:
   name: Lock Layer
   description: Lock a layer to prevent any modifications
-  target:
-    entity:
-      integration: lighting_manager
-      domain: switch
+  fields:
+    zone_id:
+      name: Zone ID
+      description: The zone containing the layer
+      required: true
+      example: "living_room"
+      selector:
+        text:
+    layer_id:
+      name: Layer ID
+      description: The layer to lock
+      required: true
+      example: "manual"
+      selector:
+        text:
 
 unlock_layer:
   name: Unlock Layer
   description: Unlock a layer to allow modifications
-  target:
-    entity:
-      integration: lighting_manager
-      domain: switch
+  fields:
+    zone_id:
+      name: Zone ID
+      description: The zone containing the layer
+      required: true
+      example: "living_room"
+      selector:
+        text:
+    layer_id:
+      name: Layer ID
+      description: The layer to unlock
+      required: true
+      example: "manual"
+      selector:
+        text:
 
 force_layer:
   name: Force Layer
   description: Force a layer to override all other priorities
-  target:
-    entity:
-      integration: lighting_manager
-      domain: switch
   fields:
+    zone_id:
+      name: Zone ID
+      description: The zone containing the layer
+      required: true
+      example: "living_room"
+      selector:
+        text:
+    layer_id:
+      name: Layer ID
+      description: The layer to force
+      required: true
+      example: "manual"
+      selector:
+        text:
     force:
       name: Force
       description: Whether to force this layer
@@ -215,10 +347,21 @@ force_layer:
 unforce_layer:
   name: Unforce Layer
   description: Remove force flag from a layer
-  target:
-    entity:
-      integration: lighting_manager
-      domain: switch
+  fields:
+    zone_id:
+      name: Zone ID
+      description: The zone containing the layer
+      required: true
+      example: "living_room"
+      selector:
+        text:
+    layer_id:
+      name: Layer ID
+      description: The layer to unforce
+      required: true
+      example: "manual"
+      selector:
+        text:
 
 # Zone Control Services
 recalculate_zone:

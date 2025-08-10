@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import logging
+from datetime import timedelta
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
@@ -20,13 +21,19 @@ from homeassistant.util import dt as dt_util
 
 from .const import (
     ATTR_BRIGHTNESS,
+    ATTR_BRIGHTNESS_FACTOR,
+    ATTR_BRIGHTNESS_PCT_DELTA,
     ATTR_COLOR_TEMP,
+    ATTR_COLOR_TEMP_FACTOR,
+    ATTR_COLOR_TEMP_KELVIN_DELTA,
     ATTR_CONDITIONS,
     ATTR_CREATED_AT,
+    ATTR_EXPIRES_AT,
     ATTR_FORCE,
     ATTR_IS_ON,
     ATTR_LAST_MODIFIED,
     ATTR_LAYER_NAME,
+    ATTR_LAYER_TYPE,
     ATTR_LOCKED,
     ATTR_PRIORITY,
     ATTR_RGB_COLOR,
@@ -44,6 +51,8 @@ from .const import (
     EVENT_CALCULATION_COMPLETE,
     EVENT_CONFLICT_DETECTED,
     LAYER_BASE_ADAPTIVE,
+    LAYER_TYPE_ABSOLUTE,
+    LAYER_TYPE_MODIFIER,
     STORAGE_KEY_PREFIX,
     STORAGE_VERSION,
 )
@@ -121,6 +130,17 @@ class ZoneCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # Callback for dynamically adding switch entities
         self.new_layer_callback = None
         
+        # Layer expiration cleanup task
+        self._cleanup_task: asyncio.Task | None = None
+        self._cleanup_interval = 60  # Check every minute for expired layers
+        
+        # Zone configuration (e.g., k_control_enabled)
+        self.zone_config = {
+            "k_control_enabled": entry.options.get("k_control_enabled", True),
+            "zone_id": self.zone_id,
+            "zone_name": self.zone_name,
+        }
+        
         # Initialize data with proper structure to avoid race conditions
         self.data = {
             "layers": {},
@@ -133,6 +153,7 @@ class ZoneCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "conflicts": [],
             "calculation_path": [],
             "calculating": False,
+            "applied_modifiers": [],
         }
         
         _LOGGER.info("Coordinator initialized for zone %s", self.zone_id)
@@ -179,6 +200,7 @@ class ZoneCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "final_state": calc_data.get("final_state", {}),
             "conflicts": calc_data.get("conflicts", []),
             "calculation_path": calc_data.get("calculation_path", []),
+            "applied_modifiers": calc_data.get("applied_modifiers", []),
             # Phase 4: Additional fields for sensors
             "last_calculation": calc_data.get("timestamp"),
             "calculation_time_ms": calc_data.get("calculation_time_ms"),
@@ -216,6 +238,9 @@ class ZoneCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         
         # Set up adaptive lighting if enabled
         await self._setup_adaptive()
+        
+        # Start background task for layer cleanup
+        self._start_cleanup_task()
 
     def _validate_storage(self, data: Any) -> bool:
         """Validate loaded data structure."""
@@ -290,11 +315,31 @@ class ZoneCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             ATTR_SOURCE: attributes.get(ATTR_SOURCE, "manual"),
             ATTR_CREATED_AT: now,
             ATTR_LAST_MODIFIED: now,
+            ATTR_LAYER_TYPE: attributes.get(ATTR_LAYER_TYPE, LAYER_TYPE_ABSOLUTE),
         }
+        
+        # Handle expiration if timeout_minutes provided
+        if "timeout_minutes" in attributes:
+            timeout_minutes = attributes["timeout_minutes"]
+            expires_at = now + timedelta(minutes=timeout_minutes)
+            self.layers[layer_id][ATTR_EXPIRES_AT] = expires_at
+        elif ATTR_EXPIRES_AT in attributes:
+            self.layers[layer_id][ATTR_EXPIRES_AT] = attributes[ATTR_EXPIRES_AT]
+        
+        # Add modifier-specific attributes
+        modifier_attrs = [
+            ATTR_BRIGHTNESS_PCT_DELTA,
+            ATTR_COLOR_TEMP_KELVIN_DELTA,
+            ATTR_BRIGHTNESS_FACTOR,
+            ATTR_COLOR_TEMP_FACTOR,
+        ]
+        for attr in modifier_attrs:
+            if attr in attributes:
+                self.layers[layer_id][attr] = attributes[attr]
         
         # Add any extra attributes not in standard set
         for key, value in attributes.items():
-            if key not in self.layers[layer_id]:
+            if key not in self.layers[layer_id] and key != "timeout_minutes":
                 self.layers[layer_id][key] = value
         
         # Save and trigger recalculation
@@ -386,9 +431,9 @@ class ZoneCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 for lid, layer in self.layers.items()
             ]
             
-            # Calculate winning state
+            # Calculate winning state with zone config for modifier support
             if all_layers:
-                calc_result = self._calculator.calculate_state(all_layers)
+                calc_result = self._calculator.calculate_state(all_layers, self.zone_config)
             else:
                 calc_result = {
                     "winning_layer": None,
@@ -396,6 +441,7 @@ class ZoneCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     "conflicts": [],
                     "calculation_path": [],
                     "total_active_layers": 0,
+                    "applied_modifiers": [],
                 }
             
             # Add timing and metadata for Phase 4 sensors
@@ -656,6 +702,11 @@ class ZoneCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self._adaptive_listener()
             self._adaptive_listener = None
         
+        # Stop cleanup task
+        if self._cleanup_task:
+            self._cleanup_task.cancel()
+            self._cleanup_task = None
+        
         # Cancel timers safely
         if self._debounce_timer and not self._debounce_timer.cancelled():
             self._debounce_timer.cancel()
@@ -669,3 +720,74 @@ class ZoneCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             await self.save_layers()
         except Exception as e:
             _LOGGER.error("Error during final save for zone %s: %s", self.zone_id, e)
+    
+    def _start_cleanup_task(self) -> None:
+        """Start the background task for cleaning expired layers."""
+        if self._cleanup_task:
+            self._cleanup_task.cancel()
+        
+        async def cleanup_loop():
+            """Background task that periodically checks for expired layers."""
+            while True:
+                try:
+                    await asyncio.sleep(self._cleanup_interval)
+                    await self._cleanup_expired_layers()
+                except asyncio.CancelledError:
+                    break
+                except Exception as err:
+                    _LOGGER.error("Error in cleanup task for zone %s: %s", self.zone_id, err)
+        
+        self._cleanup_task = self.hass.async_create_task(cleanup_loop())
+        _LOGGER.debug("Started cleanup task for zone %s", self.zone_id)
+    
+    async def _cleanup_expired_layers(self) -> None:
+        """Remove any layers that have expired."""
+        now = get_timezone_aware_now()
+        expired_layers = []
+        
+        for layer_id, layer_data in self.layers.items():
+            if ATTR_EXPIRES_AT in layer_data:
+                expires_at = layer_data[ATTR_EXPIRES_AT]
+                # Handle both datetime objects and ISO strings
+                if isinstance(expires_at, str):
+                    expires_at = dt_util.parse_datetime(expires_at)
+                
+                if expires_at and now >= expires_at:
+                    expired_layers.append(layer_id)
+                    _LOGGER.info(
+                        "Layer %s in zone %s has expired (expired at %s)",
+                        layer_id, self.zone_id, expires_at
+                    )
+        
+        # Remove expired layers
+        if expired_layers:
+            for layer_id in expired_layers:
+                # Skip adaptive layer - it should never expire
+                if layer_id == LAYER_BASE_ADAPTIVE:
+                    continue
+                    
+                del self.layers[layer_id]
+                _LOGGER.info("Removed expired layer %s from zone %s", layer_id, self.zone_id)
+            
+            # Save and recalculate if we removed anything
+            self.schedule_save()
+            self.schedule_recalculation()
+    
+    def get_layer_time_remaining(self, layer_id: str) -> timedelta | None:
+        """Get the time remaining before a layer expires."""
+        layer = self.layers.get(layer_id)
+        if not layer or ATTR_EXPIRES_AT not in layer:
+            return None
+        
+        expires_at = layer[ATTR_EXPIRES_AT]
+        if isinstance(expires_at, str):
+            expires_at = dt_util.parse_datetime(expires_at)
+        
+        if not expires_at:
+            return None
+        
+        now = get_timezone_aware_now()
+        if now >= expires_at:
+            return timedelta(0)  # Already expired
+        
+        return expires_at - now

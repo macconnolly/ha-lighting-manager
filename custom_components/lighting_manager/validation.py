@@ -122,12 +122,108 @@ def validate_layer_data(data: dict[str, Any]) -> bool:
         return False
 
 
+def validate_layer_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Validate a layer payload for create/update operations.
+    
+    Enforces strict rules about what attributes are allowed based on layer_type.
+    
+    Args:
+        payload: Dictionary containing layer attributes
+        
+    Returns:
+        Validated and cleaned payload
+        
+    Raises:
+        ValueError: If payload violates layer type rules
+    """
+    layer_type = payload.get(ATTR_LAYER_TYPE, LAYER_TYPE_ABSOLUTE)
+    
+    # Absolute attributes (only allowed in absolute layers)
+    absolute_attrs = {
+        ATTR_BRIGHTNESS,
+        ATTR_COLOR_TEMP,
+        ATTR_RGB_COLOR,
+    }
+    
+    # Modifier attributes (only allowed in modifier/multiplier layers)
+    modifier_attrs = {
+        ATTR_BRIGHTNESS_PCT_DELTA,
+        ATTR_COLOR_TEMP_KELVIN_DELTA,
+        ATTR_BRIGHTNESS_FACTOR,
+        ATTR_COLOR_TEMP_FACTOR,
+    }
+    
+    if layer_type in [LAYER_TYPE_MODIFIER, LAYER_TYPE_MULTIPLIER]:
+        # Check for forbidden absolute attributes
+        forbidden = absolute_attrs.intersection(payload.keys())
+        if forbidden:
+            raise ValueError(
+                f"Modifier layer cannot have absolute attributes: {', '.join(forbidden)}. "
+                f"Use modifiers like brightness_pct_delta instead."
+            )
+    else:
+        # Absolute layer - check for forbidden modifier attributes
+        forbidden = modifier_attrs.intersection(payload.keys())
+        if forbidden:
+            raise ValueError(
+                f"Absolute layer cannot have modifier attributes: {', '.join(forbidden)}. "
+                f"Use absolute values like brightness instead."
+            )
+    
+    # Validate modifier values if present
+    if ATTR_BRIGHTNESS_PCT_DELTA in payload:
+        delta = payload[ATTR_BRIGHTNESS_PCT_DELTA]
+        if not isinstance(delta, (int, float)):
+            raise ValueError(f"brightness_pct_delta must be a number, got {type(delta).__name__}")
+        if not -100 <= delta <= 100:
+            raise ValueError(f"brightness_pct_delta must be between -100 and 100, got {delta}")
+    
+    if ATTR_COLOR_TEMP_KELVIN_DELTA in payload:
+        delta = payload[ATTR_COLOR_TEMP_KELVIN_DELTA]
+        if not isinstance(delta, (int, float)):
+            raise ValueError(f"color_temp_kelvin_delta must be a number, got {type(delta).__name__}")
+        if not -5000 <= delta <= 5000:
+            raise ValueError(f"color_temp_kelvin_delta must be between -5000 and 5000, got {delta}")
+    
+    if ATTR_BRIGHTNESS_FACTOR in payload:
+        factor = payload[ATTR_BRIGHTNESS_FACTOR]
+        if not isinstance(factor, (int, float)):
+            raise ValueError(f"brightness_factor must be a number, got {type(factor).__name__}")
+        if not 0 <= factor <= 2:
+            raise ValueError(f"brightness_factor must be between 0 and 2, got {factor}")
+    
+    if ATTR_COLOR_TEMP_FACTOR in payload:
+        factor = payload[ATTR_COLOR_TEMP_FACTOR]
+        if not isinstance(factor, (int, float)):
+            raise ValueError(f"color_temp_factor must be a number, got {type(factor).__name__}")
+        if not 0.5 <= factor <= 2:
+            raise ValueError(f"color_temp_factor must be between 0.5 and 2, got {factor}")
+    
+    # Validate timeout_minutes if present
+    if "timeout_minutes" in payload:
+        timeout = payload["timeout_minutes"]
+        if not isinstance(timeout, (int, float)):
+            raise ValueError(f"timeout_minutes must be a number, got {type(timeout).__name__}")
+        if not 0.1 <= timeout <= 10080:  # Max 1 week
+            raise ValueError(f"timeout_minutes must be between 0.1 and 10080 (1 week), got {timeout}")
+    
+    return payload
+
+
 # Import these in const.py to avoid circular imports
 from .const import (
     ATTR_BRIGHTNESS,
+    ATTR_BRIGHTNESS_FACTOR,
+    ATTR_BRIGHTNESS_PCT_DELTA,
     ATTR_COLOR_TEMP,
+    ATTR_COLOR_TEMP_FACTOR,
+    ATTR_COLOR_TEMP_KELVIN_DELTA,
     ATTR_IS_ON,
+    ATTR_LAYER_TYPE,
     ATTR_PRIORITY,
     ATTR_RGB_COLOR,
     ATTR_TRANSITION,
+    LAYER_TYPE_ABSOLUTE,
+    LAYER_TYPE_MODIFIER,
+    LAYER_TYPE_MULTIPLIER,
 )

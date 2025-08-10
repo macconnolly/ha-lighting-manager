@@ -38,6 +38,19 @@ ATTR_SOURCE: Final = "source"
 ATTR_CREATED_AT: Final = "created_at"
 ATTR_LAST_MODIFIED: Final = "last_modified"
 ATTR_IS_ON: Final = "is_on"
+ATTR_EXPIRES_AT: Final = "expires_at"
+ATTR_LAYER_TYPE: Final = "layer_type"
+
+# Modifier-specific attributes
+ATTR_BRIGHTNESS_PCT_DELTA: Final = "brightness_pct_delta"
+ATTR_COLOR_TEMP_KELVIN_DELTA: Final = "color_temp_kelvin_delta"
+ATTR_BRIGHTNESS_FACTOR: Final = "brightness_factor"
+ATTR_COLOR_TEMP_FACTOR: Final = "color_temp_factor"
+
+# Layer types
+LAYER_TYPE_ABSOLUTE: Final = "absolute"
+LAYER_TYPE_MODIFIER: Final = "modifier"
+LAYER_TYPE_MULTIPLIER: Final = "multiplier"
 
 # Adaptive Lighting
 ATTR_ADAPTIVE_FACTOR: Final = "adaptive_factor"
@@ -80,6 +93,7 @@ DATA_LIGHT_CONTROLLER: Final = "light_controller"
 SERVICES_REGISTERED: Final = "services_registered"
 
 # Service Names
+SERVICE_SET_LAYER: Final = "set_layer"
 SERVICE_ACTIVATE_LAYER: Final = "activate_layer"
 SERVICE_DEACTIVATE_LAYER: Final = "deactivate_layer"
 SERVICE_UPDATE_LAYER: Final = "update_layer"
