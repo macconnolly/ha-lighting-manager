@@ -51,39 +51,51 @@ template:
           condition: "{{ states('weather.home') }}"
           cloud_coverage: "{{ state_attr('weather.home', 'cloud_coverage') | default(0) }}"
           requires_modifier: >
-            {{ states('sensor.lighting_weather_impact') | int >= 25 }}
+            {% if this.state | default('unknown') == 'unknown' %}
+              false
+            {% else %}
+              {{ this.state | int(0) >= 25 }}
+            {% endif %}
           
           brightness_delta: >
-            {% set score = states('sensor.lighting_weather_impact') | int %}
-            {% set hour = now().hour %}
-            {% set is_daytime = 6 <= hour <= 20 %}
-            
-            {# Smooth interpolation based on score #}
-            {% if score == 0 %}
+            {% if this.state | default('unknown') == 'unknown' %}
               0
             {% else %}
-              {% set base_boost = (score / 4) | round(0) %}
-              {% set time_factor = 1.0 if is_daytime else 0.6 %}
-              {{ (base_boost * time_factor) | round(0) }}
+              {% set score = this.state | int(0) %}
+              {% set hour = now().hour %}
+              {% set is_daytime = 6 <= hour <= 20 %}
+              
+              {# Smooth interpolation based on score #}
+              {% if score == 0 %}
+                0
+              {% else %}
+                {% set base_boost = (score / 4) | round(0) %}
+                {% set time_factor = 1.0 if is_daytime else 0.6 %}
+                {{ (base_boost * time_factor) | round(0) }}
+              {% endif %}
             {% endif %}
           
           color_temp_delta: >
-            {% set score = states('sensor.lighting_weather_impact') | int %}
-            {% set condition = states('weather.home') %}
-            
-            {# Warmer light for comfort during bad weather #}
-            {% if 'lightning' in condition %}
-              -200  {# Less warm during storms for visibility #}
-            {% elif 'snow' in condition %}
-              -400  {# Warm contrast to cold outside #}
-            {% elif score >= 50 %}
-              -350
-            {% elif score >= 30 %}
-              -250
-            {% elif score >= 25 %}
-              -150
-            {% else %}
+            {% if this.state | default('unknown') == 'unknown' %}
               0
+            {% else %}
+              {% set score = this.state | int(0) %}
+              {% set condition = states('weather.home') %}
+            
+              {# Warmer light for comfort during bad weather #}
+              {% if 'lightning' in condition %}
+                -200  {# Less warm during storms for visibility #}
+              {% elif 'snow' in condition %}
+                -400  {# Warm contrast to cold outside #}
+              {% elif score >= 50 %}
+                -350
+              {% elif score >= 30 %}
+                -250
+              {% elif score >= 25 %}
+                -150
+              {% else %}
+                0
+              {% endif %}
             {% endif %}
 
 automation:

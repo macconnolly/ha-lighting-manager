@@ -744,13 +744,18 @@ class ZoneCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             while True:
                 try:
                     await asyncio.sleep(self._cleanup_interval)
-                    await self._cleanup_expired_layers()
+                    if self.hass.is_running:
+                        await self._cleanup_expired_layers()
                 except asyncio.CancelledError:
+                    _LOGGER.debug("Cleanup task cancelled for zone %s", self.zone_id)
                     break
                 except Exception as err:
                     _LOGGER.error("Error in cleanup task for zone %s: %s", self.zone_id, err)
         
-        self._cleanup_task = self.hass.async_create_task(cleanup_loop())
+        self._cleanup_task = self.hass.async_create_background_task(
+            cleanup_loop(),
+            f"lighting_manager_cleanup_{self.zone_id}"
+        )
         _LOGGER.debug("Started cleanup task for zone %s", self.zone_id)
     
     async def _cleanup_expired_layers(self) -> None:
