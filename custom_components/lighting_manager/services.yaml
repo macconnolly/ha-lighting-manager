@@ -1,79 +1,192 @@
 insert_scene:
-  description: Apply a scene to lights
+  name: Insert Scene
+  description: Apply a scene on a specific layer.
   fields:
     entity_id:
-      description: entity_id of scene to apply
-      example: "scene.name_of_scene"
+      required: true
+      selector:
+        entity:
+          domain: scene
     id:
-      description: Unique identifier of layer
-      example: "my_layer_name"
+      required: true
+      selector:
+        text:
     priority:
-      description: Layer priority of scene (Higher the more visible)
-      example: "0"
+      required: true
+      selector:
+        number:
+          min: 0
+          max: 100
     clear_layer:
-      description: Clears all other entity states from layer before applying when true.
-      example: "true"
+      selector:
+        boolean:
     color:
-      description: RGB color value to fill in scene states.
-      example: "[255, 255, 0]"
+      selector:
+        color_rgb:
 
 insert_state:
-  description: Set entity state at specified layer.
+  name: Insert State
+  description: Set an entity state at a layer.
   fields:
     entity_id:
-      description: entity_id of entity or group
-      example: "domain.name_of_entity"
+      required: true
+      selector:
+        entity:
+          multiple: true
     priority:
-      description: Layer priority
-      example: "0"
+      required: true
+      selector:
+        number:
+          min: 0
+          max: 100
     id:
-      description: Unique identifier of layer
-      example: "my_layer_name"
+      required: true
+      selector:
+        text:
     state:
-      description: Desired entity state
-      example: "on"
+      selector:
+        text:
     attributes:
-      description: State Attributes
+      selector:
+        object:
     clear_layer:
-      description: Clears all other entity states from layer before applying when true.
-      example: "true"
+      selector:
+        boolean:
 
 remove_layer:
-  description: Remove layer or scene from all lights, a specified group, or a specified light.
+  name: Remove Layer
+  description: Remove a layer from entities.
   fields:
     entity_id:
-      description: entity_id of light or group. When no entity is specified, layer will be removed from all lights.
-      example: "light.name_of_light"
+      selector:
+        entity:
+          multiple: true
     id:
-      description: Layer ID or entity id of scene to be removed.
-      example: "my_layer_name"
+      required: true
+      selector:
+        text:
 
 refresh:
-  description: Refresh provided group or entity to current state.
+  name: Refresh Entity
+  description: Refresh a managed entity or group.
   fields:
     entity_id:
-      description: entity_id of entity or group to be refreshed.
-      example: "light.name_of_light"
+      required: true
+      selector:
+        entity:
+          multiple: true
 
 refresh_all:
-  description: Refresh all managed entities to their current state.
+  name: Refresh All
+  description: Refresh all managed entities.
 
 add_adaptive:
-  description: Add light or group of lights to adaptive time-of-day based color temperature until it is turned off.
+  name: Add Adaptive
+  description: Enable adaptive updates for lights.
   fields:
     entity_id:
-      description: entity_id of light or group containing lights.
-      example: light.name_of_light
+      required: true
+      selector:
+        entity:
+          multiple: true
     brightness:
-      description: Optional boolean indicating whether to adaptively adjust brightness or integer to indicate turn_on brightness
-      example: true
+      selector:
+        boolean:
     color_temp:
-      description: Optional boolean indicating whether to adaptively adjust color temperature
-      example: true
+      selector:
+        boolean:
 
 remove_adaptive:
-  description: Remove light or group of lights from having their color temperature adjusted based on time-of-day.
+  name: Remove Adaptive
+  description: Disable adaptive updates for lights.
   fields:
     entity_id:
-      description: entity_id of light or group containing lights.
+      required: true
+      selector:
+        entity:
+          multiple: true
 
+activate_layer:
+  name: Activate Layer
+  description: Activate a layer with optional attribute overrides.
+  target:
+    entity:
+      domain: layer
+  fields:
+    brightness:
+      selector:
+        number:
+          min: 0
+          max: 255
+    color_temp:
+      selector:
+        number:
+          min: 0
+          max: 1000
+    rgb_color:
+      selector:
+        color_rgb:
+    transition:
+      selector:
+        number:
+          min: 0
+          max: 60
+          step: 0.1
+    force:
+      selector:
+        boolean:
+    locked:
+      selector:
+        boolean:
+    conditions:
+      selector:
+        object:
+    source:
+      selector:
+        text:
+
+update_layer:
+  name: Update Layer
+  description: Update attributes on a layer.
+  target:
+    entity:
+      domain: layer
+  fields:
+    brightness:
+      selector:
+        number:
+          min: 0
+          max: 255
+    color_temp:
+      selector:
+        number:
+          min: 0
+          max: 1000
+    rgb_color:
+      selector:
+        color_rgb:
+    transition:
+      selector:
+        number:
+          min: 0
+          max: 60
+          step: 0.1
+    force:
+      selector:
+        boolean:
+    locked:
+      selector:
+        boolean:
+    conditions:
+      selector:
+        object:
+    source:
+      selector:
+        text:
+
+deactivate_layer:
+  name: Deactivate Layer
+  description: Deactivate a layer.
+  target:
+    entity:
+      domain: layer

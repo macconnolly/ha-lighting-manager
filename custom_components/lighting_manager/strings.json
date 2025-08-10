@@ -1,0 +1,15 @@
+{
+  "title": "Lighting Manager",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Lighting Manager",
+        "description": "Create a lighting zone",
+        "data": {
+          "zone_name": "Zone name",
+          "light_entities": "Lights"
+        }
+      }
+    }
+  }
+}
