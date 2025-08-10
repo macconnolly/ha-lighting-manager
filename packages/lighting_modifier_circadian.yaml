@@ -155,7 +155,7 @@ automation:
                 continue_on_error: true
           
           # Apply circadian modifiers
-          default:
+        default:
             - repeat:
                 for_each: "{{ state_attr('sensor.lighting_manager_zones', 'zone_ids') | default([]) }}"
                 sequence:
