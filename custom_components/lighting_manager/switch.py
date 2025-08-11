@@ -256,8 +256,15 @@ class LayerSwitch(CoordinatorEntity[ZoneCoordinator], SwitchEntity):
         if ATTR_TRANSITION in kwargs:
             updates[ATTR_TRANSITION] = kwargs[ATTR_TRANSITION]
         
-        # Call coordinator to update
-        if await self.coordinator.update_layer(self.layer_id, **updates):
+        # Call layer_manager to update
+        if self.coordinator.layer_manager.update_layer(self.layer_id, updates):
+            # Save if needed
+            if self.coordinator.layer_manager.has_pending_save():
+                await self.coordinator.layer_manager.save()
+            
+            # Trigger coordinator update
+            self.coordinator.schedule_recalculation()
+            
             # Fire event
             self.hass.bus.async_fire(
                 EVENT_LAYER_ACTIVATED,
@@ -281,8 +288,15 @@ class LayerSwitch(CoordinatorEntity[ZoneCoordinator], SwitchEntity):
             _LOGGER.warning("Cannot deactivate locked layer %s", self.entity_id)
             return
         
-        # Call coordinator to update
-        if await self.coordinator.update_layer(self.layer_id, **{ATTR_IS_ON: False}):
+        # Call layer_manager to update
+        if self.coordinator.layer_manager.update_layer(self.layer_id, {ATTR_IS_ON: False}):
+            # Save if needed
+            if self.coordinator.layer_manager.has_pending_save():
+                await self.coordinator.layer_manager.save()
+            
+            # Trigger coordinator update
+            self.coordinator.schedule_recalculation()
+            
             # Fire event
             self.hass.bus.async_fire(
                 EVENT_LAYER_DEACTIVATED,

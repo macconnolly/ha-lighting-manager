@@ -1,4 +1,5 @@
 """State Calculator - Pure functional calculation with no Home Assistant dependencies."""
+# TODO: Delete the old calculator.py file which this file replaces.
 from __future__ import annotations
 
 import logging

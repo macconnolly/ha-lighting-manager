@@ -300,50 +300,11 @@ class ZoneCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
             self.data["error"] = str(err)
             return self.data
     
-    # Compatibility methods for existing code
-    
-    async def create_layer(self, layer_name: str, **attributes) -> str:
-        """Create a new layer (compatibility method)."""
-        layer_id = layer_name.lower().replace(" ", "_")
-        
-        # Ensure unique ID
-        suffix = 1
-        test_id = layer_id
-        while test_id in self.layer_manager.layers:
-            test_id = f"{layer_id}_{suffix}"
-            suffix += 1
-        layer_id = test_id
-        
-        # Create layer
-        layer_data = {
-            "layer_name": layer_name,
-            "is_on": False,
-            **attributes,
-        }
-        
-        self.layer_manager.create_layer(layer_id, layer_data)
-        
-        # Save if not temporary
-        if attributes.get("source") != "manual_override":
-            await self.layer_manager.save()
-        
-        # Notify switch platform
-        if self.new_layer_callback:
-            await self.new_layer_callback(layer_id, layer_name)
-        
-        return layer_id
-    
-    async def update_layer(self, layer_id: str, **updates) -> bool:
-        """Update a layer (compatibility method)."""
-        success = self.layer_manager.update_layer(layer_id, updates)
-        
-        if success and self.layer_manager.has_pending_save():
-            await self.layer_manager.save()
-        
-        return success
+    # Compatibility methods removed - use layer_manager.set_layer directly
+    # The coordinator should not contain business logic, only orchestration
     
     async def delete_layer(self, layer_id: str) -> bool:
-        """Delete a layer (compatibility method)."""
+        """Delete a layer (kept for compatibility)."""
         success = self.layer_manager.delete_layer(layer_id)
         
         if success:

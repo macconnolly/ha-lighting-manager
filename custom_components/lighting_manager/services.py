@@ -408,45 +408,7 @@ async def _get_switch_entities(hass: HomeAssistant, call: ServiceCall) -> list:
 
 # Service Handlers
 
-async def handle_create_layer(hass: HomeAssistant, call: ServiceCall) -> None:
-    """Create a new layer in a zone.
-    
-    Simple zone-based implementation that takes:
-    - zone_id: The zone to create the layer in
-    - layer_name: Name for the new layer
-    - priority: Layer priority (optional)
-    - brightness/color_temp/transition: Initial settings (optional)
-    """
-    layer_name = call.data.get("layer_name")
-    
-    if not layer_name:
-        raise ServiceValidationError("layer_name is required")
-    
-    # Use unified helper to get coordinator
-    coordinator = await _get_coordinator_from_call(hass, call)
-    
-    # Build layer attributes
-    attributes = {}
-    if "brightness" in call.data:
-        attributes[ATTR_BRIGHTNESS] = call.data["brightness"]
-    if "color_temp" in call.data:
-        attributes[ATTR_COLOR_TEMP] = call.data["color_temp"]
-    if "transition" in call.data:
-        attributes[ATTR_TRANSITION] = call.data["transition"]
-    
-    priority = call.data.get("priority", 50)
-    
-    # Create the layer
-    try:
-        layer_id = await coordinator.create_layer(
-            layer_name=layer_name,
-            priority=priority,
-            **attributes
-        )
-        _LOGGER.info("Created layer %s in zone %s", layer_id, zone_id)
-    except Exception as e:
-        _LOGGER.error("Failed to create layer in zone %s: %s", zone_id, e)
-        raise ServiceValidationError(f"Failed to create layer: {e}")
+
 
 
 async def handle_set_layer(hass: HomeAssistant, call: ServiceCall) -> ServiceResponse:
@@ -502,12 +464,16 @@ async def handle_set_layer(hass: HomeAssistant, call: ServiceCall) -> ServiceRes
         if "transition" in layer_data:
             layer_data["transition"] = validate_transition(layer_data["transition"])
         
-        # Call the single entry point in LayerManager
+        # Call THE SINGLE ENTRY POINT in LayerManager
         success, action = coordinator.layer_manager.set_layer(layer_id, layer_data)
         
         # Save if needed
-        if coordinator.layer_manager.has_pending_save():
+        if success and coordinator.layer_manager.has_pending_save():
             await coordinator.layer_manager.save()
+        
+        # Trigger recalculation
+        if success:
+            coordinator.schedule_recalculation()
         
         # Fire event
         hass.bus.async_fire(
@@ -1071,17 +1037,25 @@ async def handle_apply_preset(hass: HomeAssistant, call: ServiceCall) -> Service
             "priority": 50,
             **preset_data
         }
-        coordinator.layer_manager.set_layer("manual", layer_data)
+        success, action = coordinator.layer_manager.set_layer("manual", layer_data)
         
-        # Fire preset event
-        hass.bus.async_fire(
-            EVENT_PRESET_APPLIED,
-            {
-                "zone_id": zone_id,
-                "preset_name": preset_name,
-                "timestamp": dt_util.now().isoformat(),
-            }
-        )
+        if success:
+            # Save if needed
+            if coordinator.layer_manager.has_pending_save():
+                await coordinator.layer_manager.save()
+            
+            # Trigger recalculation
+            coordinator.schedule_recalculation()
+            
+            # Fire preset event
+            hass.bus.async_fire(
+                EVENT_PRESET_APPLIED,
+                {
+                    "zone_id": zone_id,
+                    "preset_name": preset_name,
+                    "timestamp": dt_util.now().isoformat(),
+                }
+            )
         
         return ServiceResponse(
             iserr=False,
