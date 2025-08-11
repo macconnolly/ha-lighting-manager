@@ -214,6 +214,7 @@ class ZoneStatusSensor(LightingManagerSensorBase):
         """Return comprehensive diagnostic attributes for debugging.
         
         Includes all internal state for full observability per architecture spec.
+        Limited to prevent exceeding Home Assistant's 16KB entity state limit.
         """
         if not self.coordinator.data:
             return {}
@@ -223,40 +224,79 @@ class ZoneStatusSensor(LightingManagerSensorBase):
         
         # Zone state machine information
         attrs["zone_state"] = data.get("zone_state")
-        attrs["zone_state_info"] = data.get("zone_state_info", {})
+        zone_info = data.get("zone_state_info", {})
+        # Limit zone_state_info to essential fields
+        if zone_info:
+            attrs["zone_state_info"] = {
+                "current_state": zone_info.get("current_state"),
+                "last_transition": zone_info.get("last_transition"),
+                "allowed_transitions": zone_info.get("allowed_transitions", [])[:5]  # Limit to 5
+            }
         
         # Manual control detection
         attrs["manual_override_active"] = data.get("manual_override_active")
         
-        # Light controller states
-        attrs["last_commanded_state"] = data.get("last_commanded_state", {})
-        attrs["current_actual_state"] = data.get("current_actual_state", {})
+        # Light controller states - summarized to avoid large dictionaries
+        last_commanded = data.get("last_commanded_state", {})
+        if last_commanded:
+            attrs["last_commanded_state"] = {
+                "power": last_commanded.get("power"),
+                "brightness": last_commanded.get("brightness"),
+                "color_temp": last_commanded.get("color_temp")
+            }
+        
+        current_actual = data.get("current_actual_state", {})
+        if current_actual:
+            attrs["current_actual_state"] = {
+                "power": current_actual.get("power"),
+                "brightness": current_actual.get("brightness"),
+                "color_temp": current_actual.get("color_temp")
+            }
         
         # Circuit breaker status
         attrs["circuit_breaker_status"] = data.get("circuit_breaker_status", {})
         
-        # Adaptive lighting values
-        attrs["adaptive_values"] = data.get("adaptive_values", {})
+        # Adaptive lighting values - limited to essentials
+        adaptive = data.get("adaptive_values", {})
+        if adaptive:
+            attrs["adaptive_values"] = {
+                "brightness": adaptive.get("brightness"),
+                "color_temp": adaptive.get("color_temp"),
+                "phase": adaptive.get("phase")
+            }
         
         # Calculation details
         attrs["winning_layer"] = data.get("winning_layer")
-        attrs["applied_modifiers"] = data.get("applied_modifiers", [])
-        attrs["conflicts"] = data.get("conflicts", [])
-        attrs["calculation_path"] = data.get("calculation_path", [])
+        
+        # Limit modifiers list to 10 items
+        modifiers = data.get("applied_modifiers", [])
+        attrs["applied_modifiers"] = modifiers[:10] if isinstance(modifiers, list) else []
+        
+        # Limit conflicts to first 3
+        conflicts = data.get("conflicts", [])
+        attrs["conflicts"] = conflicts[:3] if isinstance(conflicts, list) else []
+        
+        # Limit calculation path to last 5 steps
+        calc_path = data.get("calculation_path", [])
+        attrs["calculation_path"] = calc_path[-5:] if isinstance(calc_path, list) else []
         
         # Timing information
         attrs["last_updated"] = data.get("last_updated")
         attrs["trigger"] = data.get("trigger")
         
-        # Error state if any
-        attrs["error"] = data.get("error")
+        # Error state - truncate if too long
+        error = data.get("error")
+        if error:
+            error_str = str(error)
+            attrs["error"] = error_str[:200] if len(error_str) > 200 else error_str
         
         # List active layers (names only for readability)
         active_layers = data.get("active_layers", [])
         if active_layers:
+            # Limit to 20 active layers shown
             attrs["active_layer_names"] = [
                 self.coordinator.layers.get(lid, {}).get("layer_name", lid)
-                for lid in active_layers
+                for lid in active_layers[:20]
             ]
             attrs["active_layer_count"] = len(active_layers)
         
