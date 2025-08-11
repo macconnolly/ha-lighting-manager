@@ -14,15 +14,15 @@ set_layer:
         text:
     layer_id:
       name: Layer ID
-      description: Unique identifier for the layer (auto-generated from layer_name if not provided)
-      required: false
+      description: Unique identifier for the layer (required for idempotent operation)
+      required: true
       example: "weather_boost"
       selector:
         text:
     layer_name:
       name: Layer Name
-      description: Human-readable layer name
-      required: true
+      description: Human-readable layer name (optional, defaults to layer_id if not provided)
+      required: false
       example: "Weather Boost"
       selector:
         text:
@@ -221,45 +221,46 @@ deactivate_layer:
       selector:
         text:
 
-update_layer:
-  name: Update Layer
-  description: Update layer attributes without changing activation state
-  target:
-    entity:
-      integration: lighting_manager
-      domain: switch
-  fields:
-    brightness:
-      name: Brightness
-      description: Brightness level (0-255)
-      required: false
-      selector:
-        number:
-          min: 0
-          max: 255
-    color_temp:
-      name: Color Temperature
-      description: Color temperature in mireds
-      required: false
-      selector:
-        number:
-          min: 153
-          max: 500
-    rgb_color:
-      name: RGB Color
-      description: RGB color values
-      required: false
-      selector:
-        color_rgb:
-    transition:
-      name: Transition
-      description: Transition time in seconds
-      required: false
-      selector:
-        number:
-          min: 0
-          max: 300
-          step: 0.1
+# DEPRECATED - use set_layer instead for idempotent operations
+# update_layer:
+#   name: Update Layer
+#   description: Update layer attributes without changing activation state
+#   target:
+#     entity:
+#       integration: lighting_manager
+#       domain: switch
+#   fields:
+#     brightness:
+#       name: Brightness
+#       description: Brightness level (0-255)
+#       required: false
+#       selector:
+#         number:
+#           min: 0
+#           max: 255
+#     color_temp:
+#       name: Color Temperature
+#       description: Color temperature in mireds
+#       required: false
+#       selector:
+#         number:
+#           min: 153
+#           max: 500
+#     rgb_color:
+#       name: RGB Color
+#       description: RGB color values
+#       required: false
+#       selector:
+#         color_rgb:
+#     transition:
+#       name: Transition
+#       description: Transition time in seconds
+#       required: false
+#       selector:
+#         number:
+#           min: 0
+#           max: 300
+#           step: 0.1
 
 set_layer_priority:
   name: Set Layer Priority

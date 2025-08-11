@@ -211,114 +211,54 @@ class ZoneStatusSensor(LightingManagerSensorBase):
     
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        """Return sanitized diagnostic attributes.
+        """Return comprehensive diagnostic attributes for debugging.
         
-        CRITICAL: Summarize data, don't dump raw dictionaries.
-        No user input, no secrets, no large objects.
+        Includes all internal state for full observability per architecture spec.
         """
         if not self.coordinator.data:
             return {}
         
+        data = self.coordinator.data
         attrs = {}
         
-        # List active layers (names only, not full data)
-        active_layers = self.coordinator.data.get("active_layers", [])
+        # Zone state machine information
+        attrs["zone_state"] = data.get("zone_state")
+        attrs["zone_state_info"] = data.get("zone_state_info", {})
+        
+        # Manual control detection
+        attrs["manual_override_active"] = data.get("manual_override_active")
+        
+        # Light controller states
+        attrs["last_commanded_state"] = data.get("last_commanded_state", {})
+        attrs["current_actual_state"] = data.get("current_actual_state", {})
+        
+        # Circuit breaker status
+        attrs["circuit_breaker_status"] = data.get("circuit_breaker_status", {})
+        
+        # Adaptive lighting values
+        attrs["adaptive_values"] = data.get("adaptive_values", {})
+        
+        # Calculation details
+        attrs["winning_layer"] = data.get("winning_layer")
+        attrs["applied_modifiers"] = data.get("applied_modifiers", [])
+        attrs["conflicts"] = data.get("conflicts", [])
+        attrs["calculation_path"] = data.get("calculation_path", [])
+        
+        # Timing information
+        attrs["last_updated"] = data.get("last_updated")
+        attrs["trigger"] = data.get("trigger")
+        
+        # Error state if any
+        attrs["error"] = data.get("error")
+        
+        # List active layers (names only for readability)
+        active_layers = data.get("active_layers", [])
         if active_layers:
-            attrs["active_layers"] = [
+            attrs["active_layer_names"] = [
                 self.coordinator.layers.get(lid, {}).get("layer_name", lid)
                 for lid in active_layers
             ]
             attrs["active_layer_count"] = len(active_layers)
-        
-        # Add conflict info if present
-        conflicts = self.coordinator.data.get("conflicts", [])
-        if conflicts:
-            # A conflict item is a dictionary, e.g. {'type': 'priority_tie', 'layers': ['id1', 'id2']}
-            # We need to extract the list of layer IDs from it.
-            # Assuming one conflict for simplicity, but can be extended for multiple.
-            conflict_item = conflicts[0]
-            conflicting_lids = conflict_item.get("layers", [])
-
-            attrs["conflicting_layers"] = [
-                self.coordinator.layers.get(lid, {}).get("layer_name", lid)
-                for lid in conflicting_lids
-            ]
-            attrs["conflict_priority"] = conflict_item.get("priority", 0)
-        
-        # Add timing info (for performance monitoring)
-        if "last_calculation" in self.coordinator.data:
-            attrs["last_calculation"] = self.coordinator.data["last_calculation"]
-        if "calculation_time_ms" in self.coordinator.data:
-            attrs["calculation_time_ms"] = round(
-                self.coordinator.data["calculation_time_ms"], 2
-            )
-        
-        # Add cache info (for optimization monitoring)
-        if "cache_hit" in self.coordinator.data:
-            attrs["cache_hit"] = self.coordinator.data["cache_hit"]
-        
-        # Add trigger source (what caused last calculation)
-        if "trigger" in self.coordinator.data:
-            trigger = self.coordinator.data["trigger"]
-            # Sanitize trigger - only include type, not full path
-            if isinstance(trigger, str):
-                attrs["trigger"] = trigger.split(".")[-1] if "." in trigger else trigger
-        
-        # Add unavailable lights if any
-        unavailable = self.coordinator.data.get("lights_unavailable", [])
-        if unavailable:
-            attrs["lights_unavailable_count"] = len(unavailable)
-            # Only include first 3 light names to prevent attribute bloat
-            attrs["lights_unavailable_sample"] = unavailable[:3]
-        
-        # Add error message if in error state
-        if self.coordinator.data.get("error"):
-            error = str(self.coordinator.data["error"])
-            # Truncate error message to prevent attribute bloat
-            attrs["error_message"] = error[:200] if len(error) > 200 else error
-        
-        # Add applied modifiers info (Phase 4 enhancement)
-        applied_modifiers = self.coordinator.data.get("applied_modifiers", [])
-        if applied_modifiers:
-            # Show which modifiers are being applied
-            attrs["applied_modifiers"] = [
-                {
-                    "name": mod.get("name", "Unknown"),
-                    "type": mod.get("type", "modifier"),
-                    "priority": mod.get("priority", 0),
-                }
-                for mod in applied_modifiers
-            ]
-            attrs["modifier_count"] = len(applied_modifiers)
-        
-        # Add winning reason with more detail
-        winning_layer = self.coordinator.data.get("winning_layer")
-        if winning_layer and winning_layer in self.coordinator.layers:
-            layer = self.coordinator.layers[winning_layer]
-            layer_name = layer.get("layer_name", winning_layer)
-            priority = layer.get("priority", 0)
-            
-            # Explain why this layer won
-            if conflicts:
-                attrs["winning_reason"] = f"{layer_name} wins tie at priority {priority}"
-            elif len(active_layers) > 1:
-                # Find second highest priority
-                other_priorities = [
-                    self.coordinator.layers.get(lid, {}).get("priority", 0)
-                    for lid in active_layers
-                    if lid != winning_layer
-                ]
-                if other_priorities:
-                    next_priority = max(other_priorities)
-                    attrs["winning_reason"] = f"{layer_name} (priority {priority}) beats next highest ({next_priority})"
-                else:
-                    attrs["winning_reason"] = f"{layer_name} wins with priority {priority}"
-            else:
-                attrs["winning_reason"] = f"Only {layer_name} is active"
-            
-            # Add modifier detail if any are applied
-            if applied_modifiers:
-                attrs["winning_reason"] += f" + {len(applied_modifiers)} modifier(s)"
         
         # Add zone configuration summary
         attrs["total_layers"] = len(self.coordinator.layers)

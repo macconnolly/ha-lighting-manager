@@ -84,10 +84,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass.data[DOMAIN]["services_registered"] = True
         _LOGGER.info("Registered lighting_manager services")
     
-    # Phase 2: Trigger initial calculation if there are active layers
-    if any(layer.get("is_on", False) for layer in coordinator.layers.values()):
-        await coordinator.async_refresh()
-        _LOGGER.info("Initial calculation performed for zone %s", entry.data["zone_name"])
+    # Coordinator handles its own initialization in async_load()
+    # No startup calculation needed - we read current light state as baseline
     
     _LOGGER.info("Successfully set up zone: %s with %d existing layers",
                  entry.data["zone_name"], len(coordinator.layers))
