@@ -9,6 +9,39 @@
 # - All modifiers use deltas, never absolute values
 # - Respects priority hierarchy
 # - Event-driven, no polling
+# - DRY principle with reusable scripts
+
+# Reusable script for efficient cleanup
+script:
+  clear_all_weather_layers:
+    alias: "Clear All Weather Layers"
+    description: "Efficiently turns off all weather modifier layers"
+    mode: parallel
+    max: 10
+    fields:
+      zone_id:
+        description: "The zone to clear weather layers from"
+        required: true
+        selector:
+          text:
+    variables:
+      # Central list of all weather layer IDs
+      weather_layers:
+        - modifier_weather_cloudy
+        - modifier_weather_rainy
+        - modifier_weather_snowy
+        - modifier_weather_fog
+        - modifier_weather_storm
+    sequence:
+      # Single loop to turn off all weather layers
+      - repeat:
+          for_each: "{{ weather_layers }}"
+          sequence:
+            - service: lighting_manager.set_layer
+              data:
+                zone_id: "{{ zone_id }}"
+                layer_id: "{{ repeat.item }}"
+                is_on: false
 
 input_boolean:
   weather_modifiers_enabled:
@@ -125,36 +158,10 @@ automation:
             - variables:
                 zone_id: "{{ repeat.item }}"
             
-            # First, turn off ALL weather modifiers for clean slate
-            - service: lighting_manager.set_layer
+            # First, clear all weather layers for this zone (using script for DRY)
+            - service: script.clear_all_weather_layers
               data:
                 zone_id: "{{ zone_id }}"
-                layer_id: "modifier_weather_cloudy"
-                is_on: false
-            
-            - service: lighting_manager.set_layer
-              data:
-                zone_id: "{{ zone_id }}"
-                layer_id: "modifier_weather_rainy"
-                is_on: false
-            
-            - service: lighting_manager.set_layer
-              data:
-                zone_id: "{{ zone_id }}"
-                layer_id: "modifier_weather_snowy"
-                is_on: false
-            
-            - service: lighting_manager.set_layer
-              data:
-                zone_id: "{{ zone_id }}"
-                layer_id: "modifier_weather_fog"
-                is_on: false
-            
-            - service: lighting_manager.set_layer
-              data:
-                zone_id: "{{ zone_id }}"
-                layer_id: "modifier_weather_storm"
-                is_on: false
             
             # Now apply the appropriate weather modifier
             - choose:

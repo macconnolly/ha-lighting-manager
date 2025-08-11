@@ -2,13 +2,14 @@
 # Architecture v5 Compliant - Updated: 2025-01-11
 #
 # Purpose: Manages user-selectable lighting modes for activities
-# Replaces complex script/scene logic with clean modifier layers
+# Features zone-aware targeting and efficient state management
 #
 # ARCHITECTURAL COMPLIANCE:
 # - Uses single entry point (set_layer with layer_id)
 # - All modifiers use deltas, never absolute values
 # - Respects priority hierarchy
 # - Event-driven, no polling
+# - DRY principle with reusable scripts
 
 input_select:
   lighting_mode:
@@ -25,10 +26,109 @@ input_select:
       - Party
       - Romantic
 
+# Zone targeting configuration
+input_text:
+  activity_zone_mapping:
+    name: Activity Zone Mapping
+    initial: ""
+    max: 255
+    icon: mdi:map-marker-multiple
+    # Format: "movie:living_room,theater|work:office,den|sleep:bedroom,master_bedroom"
+
+template:
+  - sensor:
+      - name: "Activity Zone Targets"
+        unique_id: activity_zone_targets
+        state: "{{ states('input_select.lighting_mode') }}"
+        attributes:
+          # Default zone targeting based on common naming patterns
+          movie_zones: >
+            {% set all_zones = state_attr('sensor.lighting_manager_zones', 'zone_ids') | default([]) %}
+            {% set custom_mapping = states('input_text.activity_zone_mapping') %}
+            {% if 'movie:' in custom_mapping %}
+              {% set movie_part = custom_mapping.split('movie:')[1].split('|')[0] if '|' in custom_mapping.split('movie:')[1] else custom_mapping.split('movie:')[1] %}
+              {{ movie_part.split(',') | map('trim') | list }}
+            {% else %}
+              {{ all_zones | select('search', 'living|theater|tv|media|family') | list }}
+            {% endif %}
+          
+          work_zones: >
+            {% set all_zones = state_attr('sensor.lighting_manager_zones', 'zone_ids') | default([]) %}
+            {% set custom_mapping = states('input_text.activity_zone_mapping') %}
+            {% if 'work:' in custom_mapping %}
+              {% set work_part = custom_mapping.split('work:')[1].split('|')[0] if '|' in custom_mapping.split('work:')[1] else custom_mapping.split('work:')[1] %}
+              {{ work_part.split(',') | map('trim') | list }}
+            {% else %}
+              {{ all_zones | select('search', 'office|study|den|desk|work') | list }}
+            {% endif %}
+          
+          sleep_zones: >
+            {% set all_zones = state_attr('sensor.lighting_manager_zones', 'zone_ids') | default([]) %}
+            {% set custom_mapping = states('input_text.activity_zone_mapping') %}
+            {% if 'sleep:' in custom_mapping %}
+              {% set sleep_part = custom_mapping.split('sleep:')[1].split('|')[0] if '|' in custom_mapping.split('sleep:')[1] else custom_mapping.split('sleep:')[1] %}
+              {{ sleep_part.split(',') | map('trim') | list }}
+            {% else %}
+              {{ all_zones | select('search', 'bedroom|master|guest_room|kids') | list }}
+            {% endif %}
+          
+          reading_zones: >
+            {% set all_zones = state_attr('sensor.lighting_manager_zones', 'zone_ids') | default([]) %}
+            {% set custom_mapping = states('input_text.activity_zone_mapping') %}
+            {% if 'reading:' in custom_mapping %}
+              {% set reading_part = custom_mapping.split('reading:')[1].split('|')[0] if '|' in custom_mapping.split('reading:')[1] else custom_mapping.split('reading:')[1] %}
+              {{ reading_part.split(',') | map('trim') | list }}
+            {% else %}
+              {{ all_zones | select('search', 'library|study|reading|nook|den') | list }}
+            {% endif %}
+          
+          # Activities that typically affect all zones
+          party_zones: "{{ state_attr('sensor.lighting_manager_zones', 'zone_ids') | default([]) }}"
+          romantic_zones: "{{ state_attr('sensor.lighting_manager_zones', 'zone_ids') | default([]) }}"
+          relaxing_zones: "{{ state_attr('sensor.lighting_manager_zones', 'zone_ids') | default([]) }}"
+          gaming_zones: >
+            {% set all_zones = state_attr('sensor.lighting_manager_zones', 'zone_ids') | default([]) %}
+            {{ all_zones | select('search', 'game|play|rec|media|den') | list }}
+
+# Reusable script for efficient cleanup
+script:
+  clear_all_activity_layers:
+    alias: "Clear All Activity Layers"
+    description: "Efficiently turns off all activity modifier layers"
+    mode: parallel
+    max: 10
+    fields:
+      zone_id:
+        description: "The zone to clear activity layers from"
+        required: true
+        selector:
+          text:
+    variables:
+      # Central list of all activity layer IDs
+      activity_layers:
+        - modifier_activity_movie
+        - modifier_activity_reading
+        - modifier_activity_work
+        - modifier_activity_gaming
+        - modifier_activity_relaxing
+        - modifier_activity_sleep
+        - modifier_activity_party
+        - modifier_activity_romantic
+    sequence:
+      # Single loop to turn off all activity layers
+      - repeat:
+          for_each: "{{ activity_layers }}"
+          sequence:
+            - service: lighting_manager.set_layer
+              data:
+                zone_id: "{{ zone_id }}"
+                layer_id: "{{ repeat.item }}"
+                is_on: false
+
 automation:
   - alias: "Lighting Activity Controller"
     id: lighting_activity_controller
-    description: "Manages activity-based lighting modifiers across all zones"
+    description: "Manages activity-based lighting with intelligent zone targeting"
     mode: queued
     max: 5
     
@@ -48,237 +148,138 @@ automation:
         state: "on"
     
     action:
-      # Get all zones
+      # Get configuration
       - variables:
-          zones: "{{ state_attr('sensor.lighting_manager_zones', 'zone_ids') | default([]) }}"
+          all_zones: "{{ state_attr('sensor.lighting_manager_zones', 'zone_ids') | default([]) }}"
           selected_mode: "{{ states('input_select.lighting_mode') }}"
+          zone_targets: "{{ states.sensor.activity_zone_targets.attributes }}"
       
-      # First, turn off ALL activity modifiers in all zones
+      # Step 1: Clear all activity layers from all zones (efficient script call)
       - repeat:
-          for_each: "{{ zones }}"
+          for_each: "{{ all_zones }}"
           sequence:
-            - variables:
+            - service: script.clear_all_activity_layers
+              data:
                 zone_id: "{{ repeat.item }}"
-            
-            # Turn off all activity modifiers for this zone
-            - service: lighting_manager.set_layer
-              data:
-                zone_id: "{{ zone_id }}"
-                layer_id: "modifier_activity_movie"
-                is_on: false
-            
-            - service: lighting_manager.set_layer
-              data:
-                zone_id: "{{ zone_id }}"
-                layer_id: "modifier_activity_reading"
-                is_on: false
-            
-            - service: lighting_manager.set_layer
-              data:
-                zone_id: "{{ zone_id }}"
-                layer_id: "modifier_activity_work"
-                is_on: false
-            
-            - service: lighting_manager.set_layer
-              data:
-                zone_id: "{{ zone_id }}"
-                layer_id: "modifier_activity_gaming"
-                is_on: false
-            
-            - service: lighting_manager.set_layer
-              data:
-                zone_id: "{{ zone_id }}"
-                layer_id: "modifier_activity_relaxing"
-                is_on: false
-            
-            - service: lighting_manager.set_layer
-              data:
-                zone_id: "{{ zone_id }}"
-                layer_id: "modifier_activity_sleep"
-                is_on: false
-            
-            - service: lighting_manager.set_layer
-              data:
-                zone_id: "{{ zone_id }}"
-                layer_id: "modifier_activity_party"
-                is_on: false
-            
-            - service: lighting_manager.set_layer
-              data:
-                zone_id: "{{ zone_id }}"
-                layer_id: "modifier_activity_romantic"
-                is_on: false
       
-      # Now activate the selected mode's modifier
+      # Step 2: Apply the selected activity to appropriate zones
+      - variables:
+          # Activity configuration constants
+          activity_config:
+            movie:
+              layer_id: "modifier_activity_movie"
+              layer_name: "Activity: Movie"
+              priority: 65
+              brightness_pct_delta: -60
+              color_temp_kelvin_delta: -300
+              transition: 10
+              target_zones: "{{ zone_targets.movie_zones | default([]) }}"
+            reading:
+              layer_id: "modifier_activity_reading"
+              layer_name: "Activity: Reading"
+              priority: 64
+              brightness_pct_delta: 20
+              color_temp_kelvin_delta: 400
+              transition: 5
+              target_zones: "{{ zone_targets.reading_zones | default([]) }}"
+            work:
+              layer_id: "modifier_activity_work"
+              layer_name: "Activity: Work"
+              priority: 63
+              brightness_pct_delta: 30
+              color_temp_kelvin_delta: 600
+              transition: 3
+              target_zones: "{{ zone_targets.work_zones | default([]) }}"
+            gaming:
+              layer_id: "modifier_activity_gaming"
+              layer_name: "Activity: Gaming"
+              priority: 62
+              brightness_pct_delta: -20
+              color_temp_kelvin_delta: -400
+              transition: 2
+              target_zones: "{{ zone_targets.gaming_zones | default([]) }}"
+            relaxing:
+              layer_id: "modifier_activity_relaxing"
+              layer_name: "Activity: Relaxing"
+              priority: 61
+              brightness_pct_delta: -30
+              color_temp_kelvin_delta: -500
+              transition: 20
+              target_zones: "{{ zone_targets.relaxing_zones | default([]) }}"
+            sleep:
+              layer_id: "modifier_activity_sleep"
+              layer_name: "Activity: Sleep"
+              priority: 75
+              brightness_pct_delta: -70
+              color_temp_kelvin_delta: -800
+              transition: 30
+              target_zones: "{{ zone_targets.sleep_zones | default([]) }}"
+            party:
+              layer_id: "modifier_activity_party"
+              layer_name: "Activity: Party"
+              priority: 66
+              brightness_pct_delta: 40
+              color_temp_kelvin_delta: 200
+              transition: 1
+              target_zones: "{{ zone_targets.party_zones | default([]) }}"
+            romantic:
+              layer_id: "modifier_activity_romantic"
+              layer_name: "Activity: Romantic"
+              priority: 64
+              brightness_pct_delta: -50
+              color_temp_kelvin_delta: -700
+              transition: 15
+              target_zones: "{{ zone_targets.romantic_zones | default([]) }}"
+      
+      # Apply selected activity configuration dynamically
       - choose:
-          # Movie Mode
+          # Default mode - all layers already cleared
           - conditions:
               - condition: template
-                value_template: "{{ selected_mode == 'Movie' }}"
-            sequence:
-              - repeat:
-                  for_each: "{{ zones }}"
-                  sequence:
-                    - service: lighting_manager.set_layer
-                      data:
-                        zone_id: "{{ repeat.item }}"
-                        layer_id: "modifier_activity_movie"
-                        layer_name: "Activity: Movie"
-                        layer_type: "modifier"
-                        priority: 65
-                        is_on: true
-                        brightness_pct_delta: -60
-                        color_temp_kelvin_delta: -300
-                        transition: 10
+                value_template: "{{ selected_mode == 'Default' }}"
+            sequence: []
           
-          # Reading Mode
-          - conditions:
-              - condition: template
-                value_template: "{{ selected_mode == 'Reading' }}"
-            sequence:
-              - repeat:
-                  for_each: "{{ zones }}"
-                  sequence:
-                    - service: lighting_manager.set_layer
-                      data:
-                        zone_id: "{{ repeat.item }}"
-                        layer_id: "modifier_activity_reading"
-                        layer_name: "Activity: Reading"
-                        layer_type: "modifier"
-                        priority: 64
-                        is_on: true
-                        brightness_pct_delta: 20
-                        color_temp_kelvin_delta: 400
-                        transition: 5
-          
-          # Work Mode
-          - conditions:
-              - condition: template
-                value_template: "{{ selected_mode == 'Work' }}"
-            sequence:
-              - repeat:
-                  for_each: "{{ zones }}"
-                  sequence:
-                    - service: lighting_manager.set_layer
-                      data:
-                        zone_id: "{{ repeat.item }}"
-                        layer_id: "modifier_activity_work"
-                        layer_name: "Activity: Work"
-                        layer_type: "modifier"
-                        priority: 63
-                        is_on: true
-                        brightness_pct_delta: 30
-                        color_temp_kelvin_delta: 600
-                        transition: 3
-          
-          # Gaming Mode
-          - conditions:
-              - condition: template
-                value_template: "{{ selected_mode == 'Gaming' }}"
-            sequence:
-              - repeat:
-                  for_each: "{{ zones }}"
-                  sequence:
-                    - service: lighting_manager.set_layer
-                      data:
-                        zone_id: "{{ repeat.item }}"
-                        layer_id: "modifier_activity_gaming"
-                        layer_name: "Activity: Gaming"
-                        layer_type: "modifier"
-                        priority: 62
-                        is_on: true
-                        brightness_pct_delta: -20
-                        color_temp_kelvin_delta: -400
-                        transition: 2
-          
-          # Relaxing Mode
-          - conditions:
-              - condition: template
-                value_template: "{{ selected_mode == 'Relaxing' }}"
-            sequence:
-              - repeat:
-                  for_each: "{{ zones }}"
-                  sequence:
-                    - service: lighting_manager.set_layer
-                      data:
-                        zone_id: "{{ repeat.item }}"
-                        layer_id: "modifier_activity_relaxing"
-                        layer_name: "Activity: Relaxing"
-                        layer_type: "modifier"
-                        priority: 61
-                        is_on: true
-                        brightness_pct_delta: -30
-                        color_temp_kelvin_delta: -500
-                        transition: 20
-          
-          # Sleep Mode (Critical - higher priority)
-          - conditions:
-              - condition: template
-                value_template: "{{ selected_mode == 'Sleep' }}"
-            sequence:
-              - repeat:
-                  for_each: "{{ zones }}"
-                  sequence:
-                    - service: lighting_manager.set_layer
-                      data:
-                        zone_id: "{{ repeat.item }}"
-                        layer_id: "modifier_activity_sleep"
-                        layer_name: "Activity: Sleep"
-                        layer_type: "modifier"
-                        priority: 75
-                        is_on: true
-                        brightness_pct_delta: -70
-                        color_temp_kelvin_delta: -800
-                        transition: 30
-          
-          # Party Mode
-          - conditions:
-              - condition: template
-                value_template: "{{ selected_mode == 'Party' }}"
-            sequence:
-              - repeat:
-                  for_each: "{{ zones }}"
-                  sequence:
-                    - service: lighting_manager.set_layer
-                      data:
-                        zone_id: "{{ repeat.item }}"
-                        layer_id: "modifier_activity_party"
-                        layer_name: "Activity: Party"
-                        layer_type: "modifier"
-                        priority: 66
-                        is_on: true
-                        brightness_pct_delta: 40
-                        color_temp_kelvin_delta: 200
-                        transition: 1
-          
-          # Romantic Mode
-          - conditions:
-              - condition: template
-                value_template: "{{ selected_mode == 'Romantic' }}"
-            sequence:
-              - repeat:
-                  for_each: "{{ zones }}"
-                  sequence:
-                    - service: lighting_manager.set_layer
-                      data:
-                        zone_id: "{{ repeat.item }}"
-                        layer_id: "modifier_activity_romantic"
-                        layer_name: "Activity: Romantic"
-                        layer_type: "modifier"
-                        priority: 64
-                        is_on: true
-                        brightness_pct_delta: -50
-                        color_temp_kelvin_delta: -700
-                        transition: 15
-          
-          # Default Mode - all modifiers already turned off
-          default: []
+          # All other modes - apply to targeted zones
+          default:
+            - variables:
+                mode_key: "{{ selected_mode | lower }}"
+                config: "{{ activity_config.get(mode_key, {}) }}"
+                target_zones: "{{ config.get('target_zones', []) }}"
+            
+            # Verify we have valid configuration
+            - condition: template
+              value_template: "{{ config and target_zones | length > 0 }}"
+            
+            # Apply to targeted zones (or all zones if none specified)
+            - variables:
+                final_zones: >
+                  {% if target_zones | length > 0 %}
+                    {{ target_zones | select('in', all_zones) | list }}
+                  {% else %}
+                    {{ all_zones }}
+                  {% endif %}
+            
+            # Apply the activity layer to each target zone
+            - repeat:
+                for_each: "{{ final_zones }}"
+                sequence:
+                  - service: lighting_manager.set_layer
+                    data:
+                      zone_id: "{{ repeat.item }}"
+                      layer_id: "{{ config.layer_id }}"
+                      layer_name: "{{ config.layer_name }}"
+                      layer_type: "modifier"
+                      priority: "{{ config.priority }}"
+                      is_on: true
+                      brightness_pct_delta: "{{ config.brightness_pct_delta }}"
+                      color_temp_kelvin_delta: "{{ config.color_temp_kelvin_delta }}"
+                      transition: "{{ config.transition }}"
       
       # Fire event for tracking
       - event: lighting_activity_changed
         event_data:
           mode: "{{ selected_mode }}"
-          zones: "{{ zones }}"
+          applied_zones: "{{ final_zones | default([]) }}"
           timestamp: "{{ now().isoformat() }}"
 
   # Automation to reset to Default on Home Assistant restart
@@ -297,3 +298,35 @@ automation:
           entity_id: input_select.lighting_mode
         data:
           option: "Default"
+
+# Quick access scripts for common activities
+script:
+  activate_movie_mode:
+    alias: "Movie Mode"
+    icon: mdi:movie-open
+    sequence:
+      - service: input_select.select_option
+        target:
+          entity_id: input_select.lighting_mode
+        data:
+          option: "Movie"
+  
+  activate_work_mode:
+    alias: "Work Mode"
+    icon: mdi:desk
+    sequence:
+      - service: input_select.select_option
+        target:
+          entity_id: input_select.lighting_mode
+        data:
+          option: "Work"
+  
+  activate_sleep_mode:
+    alias: "Sleep Mode"
+    icon: mdi:sleep
+    sequence:
+      - service: input_select.select_option
+        target:
+          entity_id: input_select.lighting_mode
+        data:
+          option: "Sleep"

@@ -235,7 +235,7 @@ automation:
             - condition: template
               value_template: "{{ zone_id in all_zones }}"
             
-            # Apply temporary welcome boost
+            # Apply temporary welcome boost with auto-expiration
             - service: lighting_manager.set_layer
               data:
                 zone_id: "{{ zone_id }}"
@@ -247,28 +247,14 @@ automation:
                 brightness_pct_delta: 30
                 color_temp_kelvin_delta: -200
                 transition: 2
+                expires_at: "{{ (now() + timedelta(minutes=5)).isoformat() }}"
       
       # Fire event for tracking
       - event: lighting_welcome_home_activated
         event_data:
           zones: "{{ welcome_zone_list }}"
           timestamp: "{{ now().isoformat() }}"
-      
-      # Remove welcome boost after 5 minutes
-      - delay:
-          minutes: 5
-      
-      - repeat:
-          for_each: "{{ welcome_zone_list }}"
-          sequence:
-            - condition: template
-              value_template: "{{ repeat.item in all_zones }}"
-            
-            - service: lighting_manager.set_layer
-              data:
-                zone_id: "{{ repeat.item }}"
-                layer_id: "modifier_presence_welcome"
-                is_on: false
+          expires_at: "{{ (now() + timedelta(minutes=5)).isoformat() }}"
 
   # Vacation mode randomizer
   - alias: "Lighting Vacation Randomizer"
