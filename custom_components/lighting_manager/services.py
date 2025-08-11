@@ -76,12 +76,12 @@ _LOGGER = logging.getLogger(__name__)
 # Service Schemas
 SERVICE_SET_LAYER_SCHEMA = vol.Schema({
     vol.Required("zone_id"): cv.string,
-    vol.Required("layer_name"): cv.string,  # layer_name is now required
-    vol.Optional("layer_id"): cv.string,  # layer_id is optional and will be derived
+    vol.Required("layer_id"): cv.string,  # Now required for idempotent operation
+    vol.Optional("layer_name"): cv.string,  # Optional display name
     vol.Optional(ATTR_LAYER_TYPE, default=LAYER_TYPE_ABSOLUTE): vol.In(
         ["absolute", "modifier", "multiplier"]
     ),
-    vol.Optional(ATTR_IS_ON, default=True): cv.boolean,
+    vol.Optional(ATTR_IS_ON): cv.boolean,  # No default, handled in service
     vol.Optional(ATTR_PRIORITY): vol.All(
         vol.Coerce(int), vol.Range(min=0, max=100)
     ),
@@ -260,12 +260,14 @@ async def async_setup_services(hass: HomeAssistant) -> None:
         ("delete_zone", handle_delete_zone, vol.Schema({
             vol.Required("zone_id"): cv.string,
         })),
-        ("create_layer", handle_create_layer, SERVICE_CREATE_LAYER_SCHEMA),
+        # DEPRECATED - use set_layer instead
+        # ("create_layer", handle_create_layer, SERVICE_CREATE_LAYER_SCHEMA),
         
         # Legacy Layer Control Services (kept for compatibility)
         (SERVICE_ACTIVATE_LAYER, handle_activate_layer, SERVICE_ACTIVATE_LAYER_SCHEMA),
         (SERVICE_DEACTIVATE_LAYER, handle_deactivate_layer, SERVICE_DEACTIVATE_LAYER_SCHEMA),
-        (SERVICE_UPDATE_LAYER, handle_update_layer, SERVICE_UPDATE_LAYER_SCHEMA),
+        # DEPRECATED - use set_layer instead
+        # (SERVICE_UPDATE_LAYER, handle_update_layer, SERVICE_UPDATE_LAYER_SCHEMA),
         (SERVICE_SET_LAYER_PRIORITY, handle_set_layer_priority, SERVICE_SET_PRIORITY_SCHEMA),
         
         # Layer State Services
@@ -448,133 +450,89 @@ async def handle_create_layer(hass: HomeAssistant, call: ServiceCall) -> None:
 
 
 async def handle_set_layer(hass: HomeAssistant, call: ServiceCall) -> ServiceResponse:
-    """Create or update a layer with specified parameters (idempotent).
+    """Set (create or update) a layer - idempotent operation.
     
-    This is the primary service for layer management, replacing both
-    create_layer and update_layer with a single, powerful interface.
+    This is THE SINGLE ENTRY POINT for all layer configuration.
     """
     zone_id = call.data["zone_id"]
-    layer_name = call.data["layer_name"]  # Required now
-    
-    # Derive layer_id from layer_name for consistency
-    # Use provided layer_id only if updating an existing layer
-    if "layer_id" in call.data:
-        # For backward compatibility when updating existing layers
-        layer_id = call.data["layer_id"]
-    else:
-        # Derive from layer_name
-        layer_id = validate_layer_name(layer_name)
+    layer_id = call.data["layer_id"]  # Required for idempotent operation
     
     try:
         # Get the coordinator for this zone
         coordinator = await _get_coordinator_from_call(hass, call)
         
-        # Prepare the layer attributes
-        attributes = {}
+        # Build complete layer data
+        layer_data = {}
         
-        # Layer name is always set
-        attributes[ATTR_LAYER_NAME] = layer_name
+        # Copy all provided attributes except zone_id and layer_id
+        for key, value in call.data.items():
+            if key not in ["zone_id", "layer_id"]:
+                layer_data[key] = value
         
-        # Layer type (critical for validation)
-        layer_type = call.data.get(ATTR_LAYER_TYPE, LAYER_TYPE_ABSOLUTE)
-        attributes[ATTR_LAYER_TYPE] = layer_type
+        # Set defaults if not provided
+        if "layer_name" not in layer_data:
+            layer_data["layer_name"] = layer_id.replace("_", " ").title()
+        if "layer_type" not in layer_data:
+            layer_data["layer_type"] = LAYER_TYPE_ABSOLUTE
+        if "priority" not in layer_data:
+            layer_data["priority"] = DEFAULT_PRIORITY
+        if "is_on" not in layer_data:
+            layer_data["is_on"] = False
+        if "source" not in layer_data:
+            layer_data["source"] = "service.set_layer"
         
-        # Is on state
-        attributes[ATTR_IS_ON] = call.data.get(ATTR_IS_ON, True)
+        # Validate and set defaults based on layer type
+        layer_type = layer_data.get("layer_type", LAYER_TYPE_ABSOLUTE)
+        if layer_type == LAYER_TYPE_ABSOLUTE:
+            # Ensure absolute layers have required attributes
+            if "brightness" not in layer_data:
+                layer_data["brightness"] = 255
+            if "color_temp" not in layer_data:
+                layer_data["color_temp"] = 370
         
-        # Priority
-        if ATTR_PRIORITY in call.data:
-            attributes[ATTR_PRIORITY] = validate_priority(call.data[ATTR_PRIORITY])
-        else:
-            attributes[ATTR_PRIORITY] = DEFAULT_PRIORITY
+        # Validate specific attributes
+        if "brightness" in layer_data:
+            layer_data["brightness"] = validate_brightness(layer_data["brightness"])
+        if "color_temp" in layer_data:
+            layer_data["color_temp"] = validate_color_temp(layer_data["color_temp"])
+        if "rgb_color" in layer_data:
+            layer_data["rgb_color"] = validate_rgb_color(layer_data["rgb_color"])
+        if "priority" in layer_data:
+            layer_data["priority"] = validate_priority(layer_data["priority"])
+        if "transition" in layer_data:
+            layer_data["transition"] = validate_transition(layer_data["transition"])
         
-        # Common attributes
-        if ATTR_TRANSITION in call.data:
-            attributes[ATTR_TRANSITION] = validate_transition(call.data[ATTR_TRANSITION])
-        if ATTR_FORCE in call.data:
-            attributes[ATTR_FORCE] = call.data[ATTR_FORCE]
-        if ATTR_LOCKED in call.data:
-            attributes[ATTR_LOCKED] = call.data[ATTR_LOCKED]
-        if ATTR_SOURCE in call.data:
-            attributes[ATTR_SOURCE] = call.data[ATTR_SOURCE]
-        else:
-            attributes[ATTR_SOURCE] = "service.set_layer"
+        # Call the single entry point in LayerManager
+        success, action = coordinator.layer_manager.set_layer(layer_id, layer_data)
         
-        # Absolute layer attributes
-        if ATTR_BRIGHTNESS in call.data:
-            attributes[ATTR_BRIGHTNESS] = validate_brightness(call.data[ATTR_BRIGHTNESS])
-        if ATTR_COLOR_TEMP in call.data:
-            attributes[ATTR_COLOR_TEMP] = validate_color_temp(call.data[ATTR_COLOR_TEMP])
-        if ATTR_RGB_COLOR in call.data:
-            attributes[ATTR_RGB_COLOR] = validate_rgb_color(call.data[ATTR_RGB_COLOR])
+        # Save if needed
+        if coordinator.layer_manager.has_pending_save():
+            await coordinator.layer_manager.save()
         
-        # Modifier layer attributes
-        if ATTR_BRIGHTNESS_PCT_DELTA in call.data:
-            attributes[ATTR_BRIGHTNESS_PCT_DELTA] = call.data[ATTR_BRIGHTNESS_PCT_DELTA]
-        if ATTR_COLOR_TEMP_KELVIN_DELTA in call.data:
-            attributes[ATTR_COLOR_TEMP_KELVIN_DELTA] = call.data[ATTR_COLOR_TEMP_KELVIN_DELTA]
-        if ATTR_BRIGHTNESS_FACTOR in call.data:
-            attributes[ATTR_BRIGHTNESS_FACTOR] = call.data[ATTR_BRIGHTNESS_FACTOR]
-        if ATTR_COLOR_TEMP_FACTOR in call.data:
-            attributes[ATTR_COLOR_TEMP_FACTOR] = call.data[ATTR_COLOR_TEMP_FACTOR]
-        
-        # Timeout support
-        if "timeout_minutes" in call.data:
-            attributes["timeout_minutes"] = call.data["timeout_minutes"]
-        
-        # Validate the complete payload
-        try:
-            validated_attributes = validate_layer_payload(attributes)
-        except ValueError as e:
-            raise ServiceValidationError(f"Invalid layer configuration: {str(e)}")
-        
-        # Check if layer exists
-        existing_layer = coordinator.get_layer(layer_id)
-        
-        if existing_layer:
-            # Update existing layer
-            success = await coordinator.update_layer(layer_id, **validated_attributes)
-            action = "updated"
-        else:
-            # Create new layer - remove layer_name and priority from dict to avoid duplicates
-            create_attrs = validated_attributes.copy()
-            layer_name = create_attrs.pop(ATTR_LAYER_NAME, layer_id)
-            priority = create_attrs.pop(ATTR_PRIORITY, DEFAULT_PRIORITY)
-            
-            created_id = await coordinator.create_layer(
-                layer_name=layer_name,
-                priority=priority,
-                **create_attrs
-            )
-            success = created_id == layer_id
-            action = "created"
-            
-            if success:
-                # Fire creation event
-                hass.bus.async_fire(
-                    EVENT_LAYER_CREATED,
-                    {
-                        "zone_id": zone_id,
-                        "layer_id": layer_id,
-                        "layer_type": layer_type,
-                        "attributes": validated_attributes,
-                        "timestamp": dt_util.now().isoformat(),
-                    }
-                )
+        # Fire event
+        hass.bus.async_fire(
+            f"{DOMAIN}_layer_{action}",
+            {
+                "zone_id": zone_id,
+                "layer_id": layer_id,
+                "action": action,
+                "layer_data": layer_data,
+                "timestamp": dt_util.now().isoformat(),
+            }
+        )
         
         return {
             "success": success,
             "zone_id": zone_id,
             "layer_id": layer_id,
             "action": action,
-            "layer_type": layer_type,
         }
         
     except ServiceValidationError:
-        raise  # Re-raise the validation error
+        raise
     except Exception as e:
         _LOGGER.error("Failed to set layer %s in zone %s: %s", layer_id, zone_id, e)
-        raise HomeAssistantError(f"Failed to set layer: {str(e)}")
+        raise ServiceValidationError(f"Failed to set layer: {str(e)}")
 
 
 async def handle_activate_layer(hass: HomeAssistant, call: ServiceCall) -> ServiceResponse:
@@ -608,9 +566,9 @@ async def handle_activate_layer(hass: HomeAssistant, call: ServiceCall) -> Servi
     results = []
     for switch in switches:
         try:
-            success = await switch.coordinator.update_layer(
+            success = switch.coordinator.layer_manager.update_layer(
                 switch.layer_id,
-                **activation_data
+                activation_data
             )
             
             if success:
@@ -666,9 +624,9 @@ async def handle_deactivate_layer(hass: HomeAssistant, call: ServiceCall) -> Ser
     results = []
     for switch in switches:
         try:
-            success = await switch.coordinator.update_layer(
+            success = switch.coordinator.layer_manager.update_layer(
                 switch.layer_id,
-                **deactivation_data
+                deactivation_data
             )
             
             if success:
@@ -736,9 +694,9 @@ async def handle_update_layer(hass: HomeAssistant, call: ServiceCall) -> Service
     results = []
     for switch in switches:
         try:
-            success = await switch.coordinator.update_layer(
+            success = switch.coordinator.layer_manager.update_layer(
                 switch.layer_id,
-                **update_data
+                update_data
             )
             
             results.append({
@@ -778,9 +736,9 @@ async def handle_set_layer_priority(hass: HomeAssistant, call: ServiceCall) -> S
     results = []
     for switch in switches:
         try:
-            success = await switch.coordinator.update_layer(
+            success = switch.coordinator.layer_manager.update_layer(
                 switch.layer_id,
-                **{ATTR_PRIORITY: priority}
+                {ATTR_PRIORITY: priority}
             )
             
             results.append({
@@ -814,9 +772,9 @@ async def handle_lock_layer(hass: HomeAssistant, call: ServiceCall) -> ServiceRe
     results = []
     for switch in switches:
         try:
-            success = await switch.coordinator.update_layer(
+            success = switch.coordinator.layer_manager.update_layer(
                 switch.layer_id,
-                **{ATTR_LOCKED: True}
+                {ATTR_LOCKED: True}
             )
             if success:
                 hass.bus.async_fire(
@@ -853,9 +811,9 @@ async def handle_unlock_layer(hass: HomeAssistant, call: ServiceCall) -> Service
     results = []
     for switch in switches:
         try:
-            success = await switch.coordinator.update_layer(
+            success = switch.coordinator.layer_manager.update_layer(
                 switch.layer_id,
-                **{ATTR_LOCKED: False}
+                {ATTR_LOCKED: False}
             )
             if success:
                 hass.bus.async_fire(
@@ -890,9 +848,9 @@ async def handle_force_layer(hass: HomeAssistant, call: ServiceCall) -> ServiceR
     
     try:
         coordinator = await _get_coordinator_from_call(hass, call)
-        success = await coordinator.update_layer(
+        success = coordinator.layer_manager.update_layer(
             layer_id,
-            **{ATTR_FORCE: force_value}
+            {ATTR_FORCE: force_value}
         )
         
         if success:
@@ -929,9 +887,9 @@ async def handle_unforce_layer(hass: HomeAssistant, call: ServiceCall) -> Servic
     
     try:
         coordinator = await _get_coordinator_from_call(hass, call)
-        success = await coordinator.update_layer(
+        success = coordinator.layer_manager.update_layer(
             layer_id,
-            **{ATTR_FORCE: False}
+            {ATTR_FORCE: False}
         )
         
         if success:
@@ -1049,7 +1007,7 @@ async def handle_reset_zone(hass: HomeAssistant, call: ServiceCall) -> ServiceRe
         
         for layer_id in list(coordinator.layers.keys()):
             if layer_id != LAYER_BASE_ADAPTIVE:
-                await coordinator.update_layer(layer_id, **{ATTR_IS_ON: False})
+                coordinator.layer_manager.update_layer(layer_id, {ATTR_IS_ON: False})
         
         # Fire reset event
         hass.bus.async_fire(
@@ -1107,10 +1065,13 @@ async def handle_apply_preset(hass: HomeAssistant, call: ServiceCall) -> Service
         preset_data[ATTR_TRANSITION] = transition
         
         # Apply to manual layer or create if doesn't exist
-        if "manual" not in coordinator.layers:
-            await coordinator.create_layer("Manual", priority=50, **preset_data)
-        else:
-            await coordinator.update_layer("manual", **preset_data)
+        # Use set_layer for idempotent operation
+        layer_data = {
+            "layer_name": "Manual",
+            "priority": 50,
+            **preset_data
+        }
+        coordinator.layer_manager.set_layer("manual", layer_data)
         
         # Fire preset event
         hass.bus.async_fire(
