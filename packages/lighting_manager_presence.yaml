@@ -1,0 +1,327 @@
+# Lighting Manager Presence Controller
+# Architecture v5 Compliant - Updated: 2025-01-11
+#
+# Purpose: Manages lighting based on home presence (Away Mode)
+# Provides security and energy savings when nobody is home
+#
+# ARCHITECTURAL COMPLIANCE:
+# - Uses single entry point (set_layer with layer_id)
+# - All modifiers use deltas, never absolute values
+# - Respects priority hierarchy
+# - Event-driven, no polling
+
+input_boolean:
+  presence_modifiers_enabled:
+    name: Presence-Based Lighting
+    icon: mdi:home-account
+  
+  vacation_mode:
+    name: Vacation Mode
+    icon: mdi:beach
+  
+  welcome_home_enabled:
+    name: Welcome Home Lighting
+    icon: mdi:home-heart
+
+input_text:
+  welcome_home_zones:
+    name: Welcome Home Zones
+    initial: ""  # Comma-separated list of zone IDs
+    icon: mdi:door-open
+    max: 255
+
+# Template sensor to detect if anyone is home
+template:
+  - binary_sensor:
+      - name: "Anyone Home"
+        unique_id: anyone_home_detector
+        state: >
+          {% set trackers = states.device_tracker 
+             | selectattr('attributes.source_type', 'defined')
+             | selectattr('attributes.source_type', 'eq', 'gps')
+             | map(attribute='entity_id') | list %}
+          {% set persons = states.person | map(attribute='entity_id') | list %}
+          {% set all_entities = trackers + persons %}
+          {% if all_entities | length > 0 %}
+            {{ all_entities | select('is_state', 'home') | list | length > 0 }}
+          {% else %}
+            {{ is_state('input_boolean.presence_override', 'on') }}
+          {% endif %}
+        attributes:
+          tracked_entities: >
+            {% set trackers = states.device_tracker 
+               | selectattr('attributes.source_type', 'defined')
+               | selectattr('attributes.source_type', 'eq', 'gps')
+               | map(attribute='entity_id') | list %}
+            {% set persons = states.person | map(attribute='entity_id') | list %}
+            {{ (trackers + persons) | list }}
+
+input_boolean:
+  presence_override:
+    name: Presence Override
+    icon: mdi:home-account
+    initial: true  # Default to someone home if no trackers configured
+
+automation:
+  - alias: "Lighting Presence Controller"
+    id: lighting_presence_controller
+    description: "Manages presence-based lighting modifiers"
+    mode: restart
+    max_exceeded: silent
+    
+    trigger:
+      # Trigger when presence changes
+      - platform: state
+        entity_id: binary_sensor.anyone_home
+      # Trigger when feature is toggled
+      - platform: state
+        entity_id: input_boolean.presence_modifiers_enabled
+      # Trigger when vacation mode changes
+      - platform: state
+        entity_id: input_boolean.vacation_mode
+      # Trigger when system becomes ready
+      - platform: state
+        entity_id: input_boolean.lighting_manager_ready
+        to: "on"
+    
+    condition:
+      # Only run if system is ready
+      - condition: state
+        entity_id: input_boolean.lighting_manager_ready
+        state: "on"
+    
+    action:
+      # Get all zones and presence data
+      - variables:
+          zones: "{{ state_attr('sensor.lighting_manager_zones', 'zone_ids') | default([]) }}"
+          presence_enabled: "{{ is_state('input_boolean.presence_modifiers_enabled', 'on') }}"
+          vacation_active: "{{ is_state('input_boolean.vacation_mode', 'on') }}"
+          someone_home: "{{ is_state('binary_sensor.anyone_home', 'on') }}"
+      
+      # Process each zone
+      - repeat:
+          for_each: "{{ zones }}"
+          sequence:
+            - variables:
+                zone_id: "{{ repeat.item }}"
+            
+            # Determine which presence modifier to apply
+            - choose:
+                # Vacation mode - simulate presence
+                - conditions:
+                    - condition: template
+                      value_template: "{{ vacation_active and presence_enabled }}"
+                  sequence:
+                    # Turn off regular away mode
+                    - service: lighting_manager.set_layer
+                      data:
+                        zone_id: "{{ zone_id }}"
+                        layer_id: "modifier_presence_away"
+                        is_on: false
+                    
+                    # Apply vacation simulator
+                    - service: lighting_manager.set_layer
+                      data:
+                        zone_id: "{{ zone_id }}"
+                        layer_id: "modifier_presence_vacation"
+                        layer_name: "Presence: Vacation"
+                        layer_type: "modifier"
+                        priority: 55
+                        is_on: true
+                        brightness_pct_delta: "{{ range(-30, -10) | random }}"
+                        transition: "{{ range(30, 120) | random }}"
+                
+                # Nobody home - apply away mode
+                - conditions:
+                    - condition: template
+                      value_template: "{{ not someone_home and presence_enabled and not vacation_active }}"
+                  sequence:
+                    # Turn off vacation mode
+                    - service: lighting_manager.set_layer
+                      data:
+                        zone_id: "{{ zone_id }}"
+                        layer_id: "modifier_presence_vacation"
+                        is_on: false
+                    
+                    # Apply away mode
+                    - service: lighting_manager.set_layer
+                      data:
+                        zone_id: "{{ zone_id }}"
+                        layer_id: "modifier_presence_away"
+                        layer_name: "Presence: Away"
+                        layer_type: "modifier"
+                        priority: 75  # Critical mode priority
+                        is_on: true
+                        brightness_pct_delta: -70
+                        transition: 60
+                
+                # Someone home or disabled - turn off all presence modifiers
+                default:
+                  - service: lighting_manager.set_layer
+                    data:
+                      zone_id: "{{ zone_id }}"
+                      layer_id: "modifier_presence_away"
+                      is_on: false
+                  
+                  - service: lighting_manager.set_layer
+                    data:
+                      zone_id: "{{ zone_id }}"
+                      layer_id: "modifier_presence_vacation"
+                      is_on: false
+      
+      # Fire event for tracking
+      - event: lighting_presence_adjusted
+        event_data:
+          someone_home: "{{ someone_home }}"
+          vacation_mode: "{{ vacation_active }}"
+          zones: "{{ zones }}"
+          timestamp: "{{ now().isoformat() }}"
+
+  # Welcome home lighting
+  - alias: "Lighting Welcome Home"
+    id: lighting_welcome_home
+    description: "Brighten lights when someone arrives home"
+    mode: single
+    
+    trigger:
+      # Someone arrives home
+      - platform: state
+        entity_id: binary_sensor.anyone_home
+        from: "off"
+        to: "on"
+    
+    condition:
+      - condition: state
+        entity_id: input_boolean.lighting_manager_ready
+        state: "on"
+      - condition: state
+        entity_id: input_boolean.welcome_home_enabled
+        state: "on"
+      # Only in evening/night
+      - condition: sun
+        after: sunset
+        before: sunrise
+    
+    action:
+      # Determine which zones to target
+      - variables:
+          all_zones: "{{ state_attr('sensor.lighting_manager_zones', 'zone_ids') | default([]) }}"
+          welcome_zone_list: >
+            {% set custom_zones = states('input_text.welcome_home_zones') %}
+            {% if custom_zones and custom_zones != '' %}
+              {{ custom_zones.split(',') | map('trim') | list }}
+            {% else %}
+              {% set default_zones = [] %}
+              {% for zone in all_zones %}
+                {% if 'entry' in zone or 'hall' in zone or 'foyer' in zone or 'porch' in zone %}
+                  {% set default_zones = default_zones + [zone] %}
+                {% endif %}
+              {% endfor %}
+              {% if default_zones | length > 0 %}
+                {{ default_zones }}
+              {% else %}
+                {{ all_zones[:2] }}  {# Fall back to first 2 zones if no entry zones found #}
+              {% endif %}
+            {% endif %}
+      
+      # Apply welcome boost to targeted zones only
+      - repeat:
+          for_each: "{{ welcome_zone_list }}"
+          sequence:
+            - variables:
+                zone_id: "{{ repeat.item }}"
+            
+            # Verify zone exists
+            - condition: template
+              value_template: "{{ zone_id in all_zones }}"
+            
+            # Apply temporary welcome boost
+            - service: lighting_manager.set_layer
+              data:
+                zone_id: "{{ zone_id }}"
+                layer_id: "modifier_presence_welcome"
+                layer_name: "Welcome Home"
+                layer_type: "modifier"
+                priority: 65
+                is_on: true
+                brightness_pct_delta: 30
+                color_temp_kelvin_delta: -200
+                transition: 2
+      
+      # Fire event for tracking
+      - event: lighting_welcome_home_activated
+        event_data:
+          zones: "{{ welcome_zone_list }}"
+          timestamp: "{{ now().isoformat() }}"
+      
+      # Remove welcome boost after 5 minutes
+      - delay:
+          minutes: 5
+      
+      - repeat:
+          for_each: "{{ welcome_zone_list }}"
+          sequence:
+            - condition: template
+              value_template: "{{ repeat.item in all_zones }}"
+            
+            - service: lighting_manager.set_layer
+              data:
+                zone_id: "{{ repeat.item }}"
+                layer_id: "modifier_presence_welcome"
+                is_on: false
+
+  # Vacation mode randomizer
+  - alias: "Lighting Vacation Randomizer"
+    id: lighting_vacation_randomizer
+    description: "Randomly adjusts lights during vacation mode"
+    mode: single
+    
+    trigger:
+      # Run every 30-90 minutes while in vacation mode
+      - platform: time_pattern
+        minutes: "/45"
+    
+    condition:
+      - condition: state
+        entity_id: input_boolean.vacation_mode
+        state: "on"
+      - condition: state
+        entity_id: input_boolean.presence_modifiers_enabled
+        state: "on"
+      - condition: state
+        entity_id: input_boolean.lighting_manager_ready
+        state: "on"
+      # Only during typical active hours
+      - condition: time
+        after: "17:00:00"
+        before: "23:30:00"
+    
+    action:
+      # Get zones
+      - variables:
+          zones: "{{ state_attr('sensor.lighting_manager_zones', 'zone_ids') | default([]) }}"
+      
+      # Randomly adjust some zones
+      - repeat:
+          for_each: "{{ zones }}"
+          sequence:
+            - variables:
+                zone_id: "{{ repeat.item }}"
+                should_adjust: "{{ range(1, 100) | random < 30 }}"  # 30% chance
+            
+            - choose:
+                - conditions:
+                    - condition: template
+                      value_template: "{{ should_adjust }}"
+                  sequence:
+                    # Update vacation modifier with random values
+                    - service: lighting_manager.set_layer
+                      data:
+                        zone_id: "{{ zone_id }}"
+                        layer_id: "modifier_presence_vacation"
+                        layer_name: "Presence: Vacation"
+                        layer_type: "modifier"
+                        priority: 55
+                        is_on: true
+                        brightness_pct_delta: "{{ range(-40, -10) | random }}"
+                        transition: "{{ range(60, 300) | random }}"

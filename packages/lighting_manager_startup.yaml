@@ -1,0 +1,68 @@
+# Lighting Manager Startup Coordinator
+# Architecture v5 Compliant - Updated: 2025-01-11
+#
+# Purpose: Ensures all lighting_manager entities are available before other automations run
+# This prevents errors from automations trying to access entities that don't exist yet
+#
+# ARCHITECTURAL COMPLIANCE:
+# - Provides reliable system ready signal
+# - Prevents race conditions during startup
+# - Does NOT trigger any light changes or calculations
+
+input_boolean:
+  lighting_manager_ready:
+    name: Lighting Manager Ready
+    icon: mdi:check-circle
+    initial: false
+
+automation:
+  - alias: "Lighting System Startup Coordinator"
+    id: lighting_system_startup_coordinator
+    description: "Wait for all entities to be available before enabling modifiers"
+    mode: single
+    
+    trigger:
+      - platform: homeassistant
+        event: start
+    
+    action:
+      # First, ensure the flag is off
+      - service: input_boolean.turn_off
+        target:
+          entity_id: input_boolean.lighting_manager_ready
+      
+      # Wait for core services to initialize
+      - delay:
+          seconds: 30
+      
+      # Check if lighting manager zones sensor exists
+      - wait_template: "{{ states('sensor.lighting_manager_zones') not in ['unknown', 'unavailable'] }}"
+        timeout: "00:02:00"
+        continue_on_timeout: true
+      
+      # Additional delay to ensure all zone entities are created
+      - delay:
+          seconds: 10
+      
+      # Check if at least one zone exists and has entities
+      - condition: template
+        value_template: >
+          {% set zones = state_attr('sensor.lighting_manager_zones', 'zone_ids') | default([]) %}
+          {{ zones | length > 0 }}
+      
+      # Set the ready flag
+      - service: input_boolean.turn_on
+        target:
+          entity_id: input_boolean.lighting_manager_ready
+      
+      # Fire event for other automations
+      - event: lighting_manager_ready
+        event_data:
+          zones: "{{ state_attr('sensor.lighting_manager_zones', 'zone_ids') }}"
+          timestamp: "{{ now().isoformat() }}"
+      
+      # Log success
+      - service: system_log.write
+        data:
+          message: "Lighting Manager is ready with {{ state_attr('sensor.lighting_manager_zones', 'zone_ids') | length }} zones"
+          level: info

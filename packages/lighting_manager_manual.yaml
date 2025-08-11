@@ -1,0 +1,363 @@
+# Lighting Manager Manual Control Interface
+# Architecture v5 Compliant - Updated: 2025-01-11
+#
+# Purpose: Provides UI controls for manual lighting adjustments
+# Works alongside automatic manual detection in the component
+#
+# ARCHITECTURAL COMPLIANCE:
+# - Uses single entry point (set_layer with layer_id)
+# - Creates high-priority manual layers
+# - Respects 2-hour timeout pattern
+# - Complements automatic detection
+
+input_select:
+  manual_brightness_preset:
+    name: Manual Brightness
+    icon: mdi:brightness-6
+    options:
+      - Normal
+      - Bright
+      - Dim
+      - Very Dim
+      - Maximum
+
+  manual_color_preset:
+    name: Manual Color
+    icon: mdi:palette
+    options:
+      - Normal
+      - Warm
+      - Very Warm
+      - Cool
+      - Daylight
+
+input_boolean:
+  manual_mode_lock:
+    name: Lock Manual Mode
+    icon: mdi:lock
+    initial: false
+
+input_number:
+  manual_timeout_hours:
+    name: Manual Override Timeout
+    icon: mdi:timer-outline
+    min: 0.5
+    max: 12
+    step: 0.5
+    initial: 2
+    unit_of_measurement: hours
+
+template:
+  - sensor:
+      - name: "Manual Control Status"
+        unique_id: manual_control_status
+        state: >
+          {% set zones = state_attr('sensor.lighting_manager_zones', 'zone_ids') | default([]) %}
+          {% set manual_active = namespace(count=0) %}
+          {% for zone in zones %}
+            {% set manual_layer = 'switch.' + zone + '_manual_layer' %}
+            {% set override_layers = states.switch 
+               | selectattr('entity_id', 'search', zone)
+               | selectattr('entity_id', 'search', 'manual_override')
+               | selectattr('state', 'eq', 'on')
+               | list %}
+            {% if is_state(manual_layer, 'on') or override_layers | length > 0 %}
+              {% set manual_active.count = manual_active.count + 1 %}
+            {% endif %}
+          {% endfor %}
+          {% if manual_active.count > 0 %}
+            active
+          {% else %}
+            inactive
+          {% endif %}
+        attributes:
+          zones_with_manual: >
+            {% set zones = state_attr('sensor.lighting_manager_zones', 'zone_ids') | default([]) %}
+            {% set manual_zones = [] %}
+            {% for zone in zones %}
+              {% set manual_layer = 'switch.' + zone + '_manual_layer' %}
+              {% set override_layers = states.switch 
+                 | selectattr('entity_id', 'search', zone)
+                 | selectattr('entity_id', 'search', 'manual_override')
+                 | selectattr('state', 'eq', 'on')
+                 | list %}
+              {% if is_state(manual_layer, 'on') or override_layers | length > 0 %}
+                {% set manual_zones = manual_zones + [zone] %}
+              {% endif %}
+            {% endfor %}
+            {{ manual_zones }}
+          locked: "{{ is_state('input_boolean.manual_mode_lock', 'on') }}"
+
+automation:
+  # Apply manual brightness preset
+  - alias: "Lighting Manual Brightness Control"
+    id: lighting_manual_brightness_control
+    description: "Apply manual brightness adjustments"
+    mode: queued
+    max: 5
+    
+    trigger:
+      - platform: state
+        entity_id: input_select.manual_brightness_preset
+    
+    condition:
+      - condition: state
+        entity_id: input_boolean.lighting_manager_ready
+        state: "on"
+    
+    action:
+      # Get selected preset and zones
+      - variables:
+          zones: "{{ state_attr('sensor.lighting_manager_zones', 'zone_ids') | default([]) }}"
+          preset: "{{ states('input_select.manual_brightness_preset') }}"
+          timeout_hours: "{{ states('input_number.manual_timeout_hours') | float(2) }}"
+          expires_at: "{{ (now() + timedelta(hours=timeout_hours)).isoformat() }}"
+          brightness_delta: >
+            {% if preset == 'Bright' %}
+              30
+            {% elif preset == 'Dim' %}
+              -30
+            {% elif preset == 'Very Dim' %}
+              -60
+            {% elif preset == 'Maximum' %}
+              50
+            {% else %}
+              0
+            {% endif %}
+      
+      # Apply to all zones
+      - repeat:
+          for_each: "{{ zones }}"
+          sequence:
+            - variables:
+                zone_id: "{{ repeat.item }}"
+            
+            - choose:
+                # Normal - turn off manual brightness
+                - conditions:
+                    - condition: template
+                      value_template: "{{ preset == 'Normal' }}"
+                  sequence:
+                    - service: lighting_manager.set_layer
+                      data:
+                        zone_id: "{{ zone_id }}"
+                        layer_id: "modifier_manual_bright"
+                        is_on: false
+                    
+                    - service: lighting_manager.set_layer
+                      data:
+                        zone_id: "{{ zone_id }}"
+                        layer_id: "modifier_manual_dim"
+                        is_on: false
+                
+                # Apply brightness modifier
+                default:
+                  # Turn off opposite modifiers
+                  - service: lighting_manager.set_layer
+                    data:
+                      zone_id: "{{ zone_id }}"
+                      layer_id: >
+                        {% if brightness_delta > 0 %}
+                          modifier_manual_dim
+                        {% else %}
+                          modifier_manual_bright
+                        {% endif %}
+                      is_on: false
+                  
+                  # Apply selected modifier
+                  - service: lighting_manager.set_layer
+                    data:
+                      zone_id: "{{ zone_id }}"
+                      layer_id: >
+                        {% if brightness_delta > 0 %}
+                          modifier_manual_bright
+                        {% else %}
+                          modifier_manual_dim
+                        {% endif %}
+                      layer_name: "Manual: {{ preset }}"
+                      layer_type: "modifier"
+                      priority: 92
+                      is_on: true
+                      brightness_pct_delta: "{{ brightness_delta }}"
+                      transition: 2
+                      expires_at: "{{ expires_at if not is_state('input_boolean.manual_mode_lock', 'on') else omit }}"
+
+  # Apply manual color preset
+  - alias: "Lighting Manual Color Control"
+    id: lighting_manual_color_control
+    description: "Apply manual color temperature adjustments"
+    mode: queued
+    max: 5
+    
+    trigger:
+      - platform: state
+        entity_id: input_select.manual_color_preset
+    
+    condition:
+      - condition: state
+        entity_id: input_boolean.lighting_manager_ready
+        state: "on"
+    
+    action:
+      # Get selected preset and zones
+      - variables:
+          zones: "{{ state_attr('sensor.lighting_manager_zones', 'zone_ids') | default([]) }}"
+          preset: "{{ states('input_select.manual_color_preset') }}"
+          timeout_hours: "{{ states('input_number.manual_timeout_hours') | float(2) }}"
+          expires_at: "{{ (now() + timedelta(hours=timeout_hours)).isoformat() }}"
+          color_delta: >
+            {% if preset == 'Warm' %}
+              -400
+            {% elif preset == 'Very Warm' %}
+              -700
+            {% elif preset == 'Cool' %}
+              400
+            {% elif preset == 'Daylight' %}
+              800
+            {% else %}
+              0
+            {% endif %}
+      
+      # Apply to all zones
+      - repeat:
+          for_each: "{{ zones }}"
+          sequence:
+            - variables:
+                zone_id: "{{ repeat.item }}"
+            
+            - choose:
+                # Normal - turn off manual color
+                - conditions:
+                    - condition: template
+                      value_template: "{{ preset == 'Normal' }}"
+                  sequence:
+                    - service: lighting_manager.set_layer
+                      data:
+                        zone_id: "{{ zone_id }}"
+                        layer_id: "modifier_manual_warm"
+                        is_on: false
+                
+                # Apply color modifier
+                default:
+                  - service: lighting_manager.set_layer
+                    data:
+                      zone_id: "{{ zone_id }}"
+                      layer_id: "modifier_manual_warm"
+                      layer_name: "Manual: {{ preset }}"
+                      layer_type: "modifier"
+                      priority: 90
+                      is_on: true
+                      color_temp_kelvin_delta: "{{ color_delta }}"
+                      transition: 5
+                      expires_at: "{{ expires_at if not is_state('input_boolean.manual_mode_lock', 'on') else omit }}"
+
+  # Clear all manual overrides
+  - alias: "Lighting Clear Manual Overrides"
+    id: lighting_clear_manual_overrides
+    description: "Remove all manual control layers"
+    mode: single
+    
+    trigger:
+      # Manual trigger via UI
+      - platform: event
+        event_type: clear_manual_overrides
+      # Or when lock is turned off after being on
+      - platform: state
+        entity_id: input_boolean.manual_mode_lock
+        from: "on"
+        to: "off"
+    
+    condition:
+      - condition: state
+        entity_id: input_boolean.lighting_manager_ready
+        state: "on"
+    
+    action:
+      # Reset UI controls
+      - service: input_select.select_option
+        target:
+          entity_id: 
+            - input_select.manual_brightness_preset
+            - input_select.manual_color_preset
+        data:
+          option: "Normal"
+      
+      # Get all zones
+      - variables:
+          zones: "{{ state_attr('sensor.lighting_manager_zones', 'zone_ids') | default([]) }}"
+      
+      # Clear all manual layers
+      - repeat:
+          for_each: "{{ zones }}"
+          sequence:
+            - variables:
+                zone_id: "{{ repeat.item }}"
+            
+            # Turn off all manual modifiers
+            - service: lighting_manager.set_layer
+              data:
+                zone_id: "{{ zone_id }}"
+                layer_id: "modifier_manual_bright"
+                is_on: false
+            
+            - service: lighting_manager.set_layer
+              data:
+                zone_id: "{{ zone_id }}"
+                layer_id: "modifier_manual_dim"
+                is_on: false
+            
+            - service: lighting_manager.set_layer
+              data:
+                zone_id: "{{ zone_id }}"
+                layer_id: "modifier_manual_warm"
+                is_on: false
+            
+            # Also turn off any detected manual overrides
+            # (This won't affect component-created overrides as they have unique IDs)
+            - service: lighting_manager.set_layer
+              data:
+                zone_id: "{{ zone_id }}"
+                layer_id: "manual"
+                is_on: false
+
+# Scripts for UI buttons
+script:
+  lighting_boost_brightness:
+    alias: "Quick Brightness Boost"
+    icon: mdi:brightness-7
+    mode: single
+    sequence:
+      - service: input_select.select_option
+        target:
+          entity_id: input_select.manual_brightness_preset
+        data:
+          option: "Bright"
+  
+  lighting_dim_lights:
+    alias: "Quick Dim"
+    icon: mdi:brightness-4
+    mode: single
+    sequence:
+      - service: input_select.select_option
+        target:
+          entity_id: input_select.manual_brightness_preset
+        data:
+          option: "Dim"
+  
+  lighting_warm_lights:
+    alias: "Warm Lights"
+    icon: mdi:fire
+    mode: single
+    sequence:
+      - service: input_select.select_option
+        target:
+          entity_id: input_select.manual_color_preset
+        data:
+          option: "Warm"
+  
+  lighting_reset_manual:
+    alias: "Reset to Automatic"
+    icon: mdi:refresh
+    mode: single
+    sequence:
+      - event: clear_manual_overrides

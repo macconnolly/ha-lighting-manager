@@ -1,0 +1,234 @@
+# Lighting Manager Circadian Rhythm Controller
+# Architecture v5 Compliant - Updated: 2025-01-11
+#
+# Purpose: Adjusts lighting based on natural circadian patterns
+# Provides boost during twilight hours on particularly dark days
+# Follows the natural golden hour light patterns for health benefits
+#
+# ARCHITECTURAL COMPLIANCE:
+# - Uses single entry point (set_layer with layer_id)
+# - All modifiers use deltas, never absolute values
+# - Respects priority hierarchy
+# - Event-driven based on sun elevation and light sensor
+
+input_boolean:
+  circadian_rhythm_enabled:
+    name: Circadian Rhythm Lighting
+    icon: mdi:weather-sunset
+    initial: true
+
+input_number:
+  circadian_light_threshold:
+    name: Light Sensor Threshold
+    icon: mdi:brightness-6
+    min: 0
+    max: 1000
+    step: 10
+    initial: 200  # Lux threshold for "dark day"
+    unit_of_measurement: lx
+
+template:
+  - sensor:
+      - name: "Golden Hour Status"
+        unique_id: golden_hour_status
+        state: >
+          {% set sun_elevation = state_attr('sun.sun', 'elevation') | float(-90) %}
+          {% set light_level = states('sensor.living_room_presence_light_sensor_light_level') | float(1000) %}
+          {% set threshold = states('input_number.golden_hour_threshold') | float(200) %}
+          
+          {% if -4 <= sun_elevation <= 4 and light_level < threshold %}
+            active
+          {% else %}
+            inactive
+          {% endif %}
+        attributes:
+          sun_elevation: "{{ state_attr('sun.sun', 'elevation') | float(-90) }}"
+          light_level: "{{ states('sensor.living_room_presence_light_sensor_light_level') | float(1000) }}"
+          threshold: "{{ states('input_number.golden_hour_threshold') | float(200) }}"
+          boost_percentage: >
+            {% set sun_elevation = state_attr('sun.sun', 'elevation') | float(-90) %}
+            {% set light_level = states('sensor.living_room_presence_light_sensor_light_level') | float(1000) %}
+            {% set threshold = states('input_number.golden_hour_threshold') | float(200) %}
+            
+            {% if -4 <= sun_elevation <= 4 and light_level < threshold %}
+              {# Calculate boost based on how dark it is and sun position #}
+              {% set darkness_factor = 1 - (light_level / threshold) %}
+              
+              {# Sun position factor - strongest at horizon (0°), weakest at edges #}
+              {% if sun_elevation >= 0 %}
+                {% set sun_factor = 1 - (sun_elevation / 4) %}
+              {% else %}
+                {% set sun_factor = 1 - (abs(sun_elevation) / 4) %}
+              {% endif %}
+              
+              {# Combine factors for smooth gradient #}
+              {% set base_boost = 10 %}  {# Minimum boost #}
+              {% set max_additional = 25 %}  {# Maximum additional boost #}
+              {% set total_boost = base_boost + (max_additional * darkness_factor * sun_factor) %}
+              
+              {{ total_boost | round(0) | int }}
+            {% else %}
+              0
+            {% endif %}
+          color_adjustment: >
+            {% set sun_elevation = state_attr('sun.sun', 'elevation') | float(-90) %}
+            
+            {% if -4 <= sun_elevation <= 4 %}
+              {# Warmer as sun gets lower #}
+              {% if sun_elevation >= 0 %}
+                {% set warmth = -200 - (100 * (1 - sun_elevation / 4)) %}
+              {% else %}
+                {% set warmth = -300 - (200 * (abs(sun_elevation) / 4)) %}
+              {% endif %}
+              {{ warmth | round(0) | int }}
+            {% else %}
+              0
+            {% endif %}
+          is_dark_day: >
+            {% set light_level = states('sensor.living_room_presence_light_sensor_light_level') | float(1000) %}
+            {% set threshold = states('input_number.golden_hour_threshold') | float(200) %}
+            {{ light_level < threshold }}
+
+automation:
+  - alias: "Lighting Golden Hour Controller"
+    id: lighting_golden_hour_controller
+    description: "Manages golden hour boost based on sun position and ambient light"
+    mode: restart
+    max_exceeded: silent
+    
+    trigger:
+      # Trigger on sun elevation changes
+      - platform: state
+        entity_id: sun.sun
+        attribute: elevation
+      # Trigger on light sensor changes
+      - platform: state
+        entity_id: sensor.living_room_presence_light_sensor_light_level
+      # Trigger when feature is toggled
+      - platform: state
+        entity_id: input_boolean.golden_hour_boost_enabled
+      # Trigger when threshold changes
+      - platform: state
+        entity_id: input_number.golden_hour_threshold
+      # Trigger when system becomes ready
+      - platform: state
+        entity_id: input_boolean.lighting_manager_ready
+        to: "on"
+    
+    condition:
+      # Only run if system is ready
+      - condition: state
+        entity_id: input_boolean.lighting_manager_ready
+        state: "on"
+      # Feature must be enabled
+      - condition: state
+        entity_id: input_boolean.golden_hour_boost_enabled
+        state: "on"
+    
+    action:
+      # Get current status and zones
+      - variables:
+          zones: "{{ state_attr('sensor.lighting_manager_zones', 'zone_ids') | default([]) }}"
+          golden_status: "{{ states('sensor.golden_hour_status') }}"
+          boost_pct: "{{ state_attr('sensor.golden_hour_status', 'boost_percentage') | int(0) }}"
+          color_delta: "{{ state_attr('sensor.golden_hour_status', 'color_adjustment') | int(0) }}"
+          sun_elevation: "{{ state_attr('sun.sun', 'elevation') | float(-90) }}"
+          light_level: "{{ states('sensor.living_room_presence_light_sensor_light_level') | float(1000) }}"
+      
+      # Process each zone
+      - repeat:
+          for_each: "{{ zones }}"
+          sequence:
+            - variables:
+                zone_id: "{{ repeat.item }}"
+            
+            - choose:
+                # Golden hour is active and conditions met
+                - conditions:
+                    - condition: template
+                      value_template: "{{ golden_status == 'active' and boost_pct > 0 }}"
+                  sequence:
+                    # Apply or update golden hour boost
+                    - service: lighting_manager.set_layer
+                      data:
+                        zone_id: "{{ zone_id }}"
+                        layer_id: "modifier_golden_hour"
+                        layer_name: "Golden Hour Boost"
+                        layer_type: "modifier"
+                        priority: 52  # Just above general weather modifiers
+                        is_on: true
+                        brightness_pct_delta: "{{ boost_pct }}"
+                        color_temp_kelvin_delta: "{{ color_delta }}"
+                        transition: 30  # Smooth transition for natural feel
+                
+                # Golden hour inactive or conditions not met
+                default:
+                  # Turn off golden hour modifier
+                  - service: lighting_manager.set_layer
+                    data:
+                      zone_id: "{{ zone_id }}"
+                      layer_id: "modifier_golden_hour"
+                      is_on: false
+                      transition: 60  # Slow fade out
+      
+      # Fire event for tracking
+      - event: lighting_golden_hour_adjusted
+        event_data:
+          status: "{{ golden_status }}"
+          boost_percentage: "{{ boost_pct }}"
+          color_adjustment: "{{ color_delta }}"
+          sun_elevation: "{{ sun_elevation }}"
+          light_level: "{{ light_level }}"
+          zones: "{{ zones }}"
+          timestamp: "{{ now().isoformat() }}"
+
+  # Notification when golden hour activates (optional)
+  - alias: "Lighting Golden Hour Notification"
+    id: lighting_golden_hour_notification
+    description: "Notify when golden hour boost activates"
+    mode: single
+    
+    trigger:
+      - platform: state
+        entity_id: sensor.golden_hour_status
+        from: "inactive"
+        to: "active"
+    
+    condition:
+      - condition: state
+        entity_id: input_boolean.golden_hour_boost_enabled
+        state: "on"
+    
+    action:
+      # Log the activation
+      - service: system_log.write
+        data:
+          message: >
+            Golden hour boost activated: 
+            Sun at {{ state_attr('sensor.golden_hour_status', 'sun_elevation') | round(1) }}°,
+            Light sensor at {{ state_attr('sensor.golden_hour_status', 'light_level') | round(0) }} lux,
+            Applying {{ state_attr('sensor.golden_hour_status', 'boost_percentage') }}% brightness boost
+          level: info
+
+# Script to test golden hour at different sun positions
+script:
+  test_golden_hour_boost:
+    alias: "Test Golden Hour Boost"
+    description: "Manually trigger golden hour calculation for testing"
+    mode: single
+    sequence:
+      - service: automation.trigger
+        target:
+          entity_id: automation.lighting_golden_hour_controller
+        data:
+          skip_condition: false
+      
+      - service: persistent_notification.create
+        data:
+          title: "Golden Hour Test"
+          message: >
+            Status: {{ states('sensor.golden_hour_status') }}
+            Sun: {{ state_attr('sensor.golden_hour_status', 'sun_elevation') | round(1) }}°
+            Light: {{ state_attr('sensor.golden_hour_status', 'light_level') | round(0) }} lux
+            Boost: {{ state_attr('sensor.golden_hour_status', 'boost_percentage') }}%
+            Color: {{ state_attr('sensor.golden_hour_status', 'color_adjustment') }}K

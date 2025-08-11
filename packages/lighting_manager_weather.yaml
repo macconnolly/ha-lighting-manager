@@ -1,0 +1,289 @@
+# Lighting Manager Weather Controller
+# Architecture v5 Compliant - Updated: 2025-01-11
+#
+# Purpose: Adjusts lighting to compensate for weather conditions
+# Replaces "environmental boost" logic with clean modifier layers
+#
+# ARCHITECTURAL COMPLIANCE:
+# - Uses single entry point (set_layer with layer_id)
+# - All modifiers use deltas, never absolute values
+# - Respects priority hierarchy
+# - Event-driven, no polling
+
+input_boolean:
+  weather_modifiers_enabled:
+    name: Weather-Based Lighting
+    icon: mdi:weather-partly-cloudy
+
+template:
+  - sensor:
+      - name: "Weather Lighting Impact"
+        unique_id: weather_lighting_impact
+        state: >
+          {% set weather = states('weather.home') %}
+          {% if weather in ['cloudy', 'partlycloudy'] %}
+            moderate
+          {% elif weather in ['rainy', 'pouring'] %}
+            significant
+          {% elif weather in ['snowy', 'snowy-rainy', 'hail'] %}
+            high
+          {% elif weather in ['lightning', 'lightning-rainy', 'exceptional'] %}
+            storm
+          {% elif weather == 'fog' %}
+            fog
+          {% else %}
+            none
+          {% endif %}
+        attributes:
+          brightness_delta: >
+            {% set weather = states('weather.home') %}
+            {% if weather == 'sunny' %}
+              0
+            {% elif weather == 'clear-night' %}
+              0
+            {% elif weather in ['cloudy', 'partlycloudy'] %}
+              15
+            {% elif weather in ['rainy', 'pouring'] %}
+              25
+            {% elif weather in ['snowy', 'snowy-rainy', 'hail'] %}
+              30
+            {% elif weather in ['lightning', 'lightning-rainy', 'exceptional'] %}
+              40
+            {% elif weather == 'fog' %}
+              20
+            {% else %}
+              0
+            {% endif %}
+          color_temp_delta: >
+            {% set weather = states('weather.home') %}
+            {% if weather == 'sunny' %}
+              0
+            {% elif weather == 'clear-night' %}
+              0
+            {% elif weather in ['cloudy', 'partlycloudy'] %}
+              -200
+            {% elif weather in ['rainy', 'pouring'] %}
+              -100
+            {% elif weather in ['snowy', 'snowy-rainy', 'hail'] %}
+              100
+            {% elif weather in ['lightning', 'lightning-rainy', 'exceptional'] %}
+              200
+            {% elif weather == 'fog' %}
+              -300
+            {% else %}
+              0
+            {% endif %}
+          weather_condition: "{{ states('weather.home') }}"
+          cloud_coverage: "{{ state_attr('weather.home', 'cloud_coverage') | default(0) }}"
+          priority: >
+            {% set weather = states('weather.home') %}
+            {% if weather in ['lightning', 'lightning-rainy', 'exceptional'] %}
+              85
+            {% else %}
+              55
+            {% endif %}
+
+automation:
+  - alias: "Lighting Weather Controller"
+    id: lighting_weather_controller
+    description: "Adjusts lighting based on weather conditions"
+    mode: restart
+    
+    trigger:
+      # Trigger on weather changes
+      - platform: state
+        entity_id: sensor.weather_lighting_impact
+      # Trigger when feature is toggled
+      - platform: state
+        entity_id: input_boolean.weather_modifiers_enabled
+      # Trigger when system becomes ready
+      - platform: state
+        entity_id: input_boolean.lighting_manager_ready
+        to: "on"
+    
+    condition:
+      # Only run if system is ready
+      - condition: state
+        entity_id: input_boolean.lighting_manager_ready
+        state: "on"
+    
+    action:
+      # Get all zones and weather data
+      - variables:
+          zones: "{{ state_attr('sensor.lighting_manager_zones', 'zone_ids') | default([]) }}"
+          weather_enabled: "{{ is_state('input_boolean.weather_modifiers_enabled', 'on') }}"
+          weather_impact: "{{ states('sensor.weather_lighting_impact') }}"
+          brightness_delta: "{{ state_attr('sensor.weather_lighting_impact', 'brightness_delta') | int(0) }}"
+          color_delta: "{{ state_attr('sensor.weather_lighting_impact', 'color_temp_delta') | int(0) }}"
+          priority: "{{ state_attr('sensor.weather_lighting_impact', 'priority') | int(55) }}"
+          weather_condition: "{{ state_attr('sensor.weather_lighting_impact', 'weather_condition') }}"
+      
+      # Process each zone
+      - repeat:
+          for_each: "{{ zones }}"
+          sequence:
+            - variables:
+                zone_id: "{{ repeat.item }}"
+            
+            # First, turn off ALL weather modifiers for clean slate
+            - service: lighting_manager.set_layer
+              data:
+                zone_id: "{{ zone_id }}"
+                layer_id: "modifier_weather_cloudy"
+                is_on: false
+            
+            - service: lighting_manager.set_layer
+              data:
+                zone_id: "{{ zone_id }}"
+                layer_id: "modifier_weather_rainy"
+                is_on: false
+            
+            - service: lighting_manager.set_layer
+              data:
+                zone_id: "{{ zone_id }}"
+                layer_id: "modifier_weather_snowy"
+                is_on: false
+            
+            - service: lighting_manager.set_layer
+              data:
+                zone_id: "{{ zone_id }}"
+                layer_id: "modifier_weather_fog"
+                is_on: false
+            
+            - service: lighting_manager.set_layer
+              data:
+                zone_id: "{{ zone_id }}"
+                layer_id: "modifier_weather_storm"
+                is_on: false
+            
+            # Now apply the appropriate weather modifier
+            - choose:
+                # Storm conditions - always apply for safety
+                - conditions:
+                    - condition: template
+                      value_template: "{{ weather_impact == 'storm' }}"
+                  sequence:
+                    - service: lighting_manager.set_layer
+                      data:
+                        zone_id: "{{ zone_id }}"
+                        layer_id: "modifier_weather_storm"
+                        layer_name: "Weather: Storm Safety"
+                        layer_type: "modifier"
+                        priority: 85  # Safety priority
+                        is_on: true
+                        brightness_pct_delta: "{{ brightness_delta }}"
+                        color_temp_kelvin_delta: "{{ color_delta }}"
+                        transition: 5
+                
+                # Fog conditions
+                - conditions:
+                    - condition: template
+                      value_template: "{{ weather_enabled and weather_impact == 'fog' }}"
+                  sequence:
+                    - service: lighting_manager.set_layer
+                      data:
+                        zone_id: "{{ zone_id }}"
+                        layer_id: "modifier_weather_fog"
+                        layer_name: "Weather: Fog"
+                        layer_type: "modifier"
+                        priority: 55
+                        is_on: true
+                        brightness_pct_delta: "{{ brightness_delta }}"
+                        color_temp_kelvin_delta: "{{ color_delta }}"
+                        transition: 30
+                
+                # Cloudy conditions
+                - conditions:
+                    - condition: template
+                      value_template: "{{ weather_enabled and weather_impact == 'moderate' }}"
+                  sequence:
+                    - service: lighting_manager.set_layer
+                      data:
+                        zone_id: "{{ zone_id }}"
+                        layer_id: "modifier_weather_cloudy"
+                        layer_name: "Weather: Cloudy"
+                        layer_type: "modifier"
+                        priority: 55
+                        is_on: true
+                        brightness_pct_delta: "{{ brightness_delta }}"
+                        color_temp_kelvin_delta: "{{ color_delta }}"
+                        transition: 30
+                
+                # Rainy conditions
+                - conditions:
+                    - condition: template
+                      value_template: "{{ weather_enabled and weather_impact == 'significant' }}"
+                  sequence:
+                    - service: lighting_manager.set_layer
+                      data:
+                        zone_id: "{{ zone_id }}"
+                        layer_id: "modifier_weather_rainy"
+                        layer_name: "Weather: Rainy"
+                        layer_type: "modifier"
+                        priority: 55
+                        is_on: true
+                        brightness_pct_delta: "{{ brightness_delta }}"
+                        color_temp_kelvin_delta: "{{ color_delta }}"
+                        transition: 30
+                
+                # Snowy conditions
+                - conditions:
+                    - condition: template
+                      value_template: "{{ weather_enabled and weather_impact == 'high' }}"
+                  sequence:
+                    - service: lighting_manager.set_layer
+                      data:
+                        zone_id: "{{ zone_id }}"
+                        layer_id: "modifier_weather_snowy"
+                        layer_name: "Weather: Snowy"
+                        layer_type: "modifier"
+                        priority: 55
+                        is_on: true
+                        brightness_pct_delta: "{{ brightness_delta }}"
+                        color_temp_kelvin_delta: "{{ color_delta }}"
+                        transition: 30
+                
+                # Clear weather or disabled - all modifiers already turned off
+                default: []
+      
+      # Fire event for tracking
+      - event: lighting_weather_adjusted
+        event_data:
+          weather: "{{ weather_condition }}"
+          impact: "{{ weather_impact }}"
+          brightness_delta: "{{ brightness_delta }}"
+          color_delta: "{{ color_delta }}"
+          zones: "{{ zones }}"
+          timestamp: "{{ now().isoformat() }}"
+
+  # Additional automation for severe weather alerts
+  - alias: "Lighting Severe Weather Alert"
+    id: lighting_severe_weather_alert
+    description: "Immediately apply storm lighting during severe weather"
+    mode: single
+    
+    trigger:
+      # NWS alerts or similar
+      - platform: state
+        entity_id: sensor.nws_alerts
+        attribute: alerts
+      # Or weather becoming severe
+      - platform: state
+        entity_id: weather.home
+        to:
+          - lightning
+          - lightning-rainy
+          - exceptional
+    
+    condition:
+      - condition: state
+        entity_id: input_boolean.lighting_manager_ready
+        state: "on"
+    
+    action:
+      # Force storm safety lighting
+      - service: automation.trigger
+        target:
+          entity_id: automation.lighting_weather_controller
+        data:
+          skip_condition: false

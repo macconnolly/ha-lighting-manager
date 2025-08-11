@@ -1,0 +1,321 @@
+# Lighting Manager Baseline Configuration
+# Architecture v5 Compliant - Updated: 2025-01-11
+# 
+# Purpose: Provides a single, safe script that populates all zones with standard
+# disabled modifier layers. Users get a complete, ready-to-customize system.
+#
+# ARCHITECTURAL PRINCIPLES:
+# - Component handles all adaptive calculations (AdaptiveProvider)
+# - Packages only create modifier layers with deltas
+# - All layers created with is_on: false for user control
+# - Standardized naming: modifier_<category>_<specific>
+# - Documented priority hierarchy prevents conflicts
+#
+# PRIORITY HIERARCHY:
+# 90-99: Manual/Guest Overrides (highest)
+# 80-89: Safety (storms, emergencies)
+# 70-79: Critical Modes (sleep, away)
+# 60-69: Focused Activities (movie, work)
+# 50-59: General Modifiers (weather, presence, motion)
+# 40-49: Ambient Comfort (circadian, climate)
+
+script:
+  lighting_apply_baseline_layers:
+    alias: "Apply Baseline Modifier Layers"
+    description: "Creates a standard set of disabled modifier layers for all zones"
+    mode: single
+    sequence:
+      # Get all lighting zones
+      - variables:
+          zones: >
+            {{ state_attr('sensor.lighting_manager_zones', 'zone_ids') | default([]) }}
+      
+      # Check if we have any zones
+      - condition: template
+        value_template: "{{ zones | length > 0 }}"
+      
+      # Apply baseline to each zone
+      - repeat:
+          for_each: "{{ zones }}"
+          sequence:
+            - variables:
+                zone_id: "{{ repeat.item }}"
+            
+            # Weather Modifiers (Priority 50-59)
+            - service: lighting_manager.set_layer
+              data:
+                zone_id: "{{ zone_id }}"
+                layer_id: "modifier_weather_cloudy"
+                layer_name: "Weather: Cloudy"
+                layer_type: "modifier"
+                priority: 55
+                is_on: false
+                brightness_pct_delta: 15
+                color_temp_kelvin_delta: -200
+                transition: 30
+            
+            - service: lighting_manager.set_layer
+              data:
+                zone_id: "{{ zone_id }}"
+                layer_id: "modifier_weather_storm"
+                layer_name: "Weather: Storm"
+                layer_type: "modifier"
+                priority: 85  # Safety priority
+                is_on: false
+                brightness_pct_delta: 40
+                color_temp_kelvin_delta: 200
+                transition: 5
+            
+            # Activity Modifiers (Priority 60-69)
+            - service: lighting_manager.set_layer
+              data:
+                zone_id: "{{ zone_id }}"
+                layer_id: "modifier_activity_movie"
+                layer_name: "Activity: Movie"
+                layer_type: "modifier"
+                priority: 65
+                is_on: false
+                brightness_pct_delta: -60
+                color_temp_kelvin_delta: -300
+                transition: 10
+            
+            - service: lighting_manager.set_layer
+              data:
+                zone_id: "{{ zone_id }}"
+                layer_id: "modifier_activity_reading"
+                layer_name: "Activity: Reading"
+                layer_type: "modifier"
+                priority: 64
+                is_on: false
+                brightness_pct_delta: 20
+                color_temp_kelvin_delta: 400
+                transition: 5
+            
+            - service: lighting_manager.set_layer
+              data:
+                zone_id: "{{ zone_id }}"
+                layer_id: "modifier_activity_work"
+                layer_name: "Activity: Work"
+                layer_type: "modifier"
+                priority: 63
+                is_on: false
+                brightness_pct_delta: 30
+                color_temp_kelvin_delta: 600
+                transition: 3
+            
+            - service: lighting_manager.set_layer
+              data:
+                zone_id: "{{ zone_id }}"
+                layer_id: "modifier_activity_gaming"
+                layer_name: "Activity: Gaming"
+                layer_type: "modifier"
+                priority: 62
+                is_on: false
+                brightness_pct_delta: -20
+                color_temp_kelvin_delta: -400
+                transition: 2
+            
+            # Presence Modifiers (Priority 50-59 and 70-79)
+            - service: lighting_manager.set_layer
+              data:
+                zone_id: "{{ zone_id }}"
+                layer_id: "modifier_presence_away"
+                layer_name: "Presence: Away"
+                layer_type: "modifier"
+                priority: 75  # Critical mode
+                is_on: false
+                brightness_pct_delta: -70
+                transition: 60
+            
+            - service: lighting_manager.set_layer
+              data:
+                zone_id: "{{ zone_id }}"
+                layer_id: "modifier_presence_vacation"
+                layer_name: "Presence: Vacation"
+                layer_type: "modifier"
+                priority: 55
+                is_on: false
+                brightness_pct_delta: -50
+                transition: 120
+            
+            - service: lighting_manager.set_layer
+              data:
+                zone_id: "{{ zone_id }}"
+                layer_id: "modifier_presence_guests"
+                layer_name: "Presence: Guests"
+                layer_type: "modifier"
+                priority: 58
+                is_on: false
+                brightness_pct_delta: 15
+                color_temp_kelvin_delta: 200
+                transition: 5
+            
+            # Motion Modifiers (Priority 50-59)
+            - service: lighting_manager.set_layer
+              data:
+                zone_id: "{{ zone_id }}"
+                layer_id: "modifier_motion_detected"
+                layer_name: "Motion: Detected"
+                layer_type: "modifier"
+                priority: 56
+                is_on: false
+                brightness_pct_delta: 25
+                transition: 1
+            
+            - service: lighting_manager.set_layer
+              data:
+                zone_id: "{{ zone_id }}"
+                layer_id: "modifier_motion_pathway"
+                layer_name: "Motion: Pathway"
+                layer_type: "modifier"
+                priority: 57
+                is_on: false
+                brightness_pct_delta: 10
+                color_temp_kelvin_delta: -600
+                transition: 2
+            
+            # Circadian Modifiers (Priority 40-49)
+            - service: lighting_manager.set_layer
+              data:
+                zone_id: "{{ zone_id }}"
+                layer_id: "modifier_circadian_morning"
+                layer_name: "Circadian: Morning"
+                layer_type: "modifier"
+                priority: 45
+                is_on: false
+                brightness_pct_delta: 10
+                color_temp_kelvin_delta: 400
+                transition: 300  # 5 minute transition
+            
+            - service: lighting_manager.set_layer
+              data:
+                zone_id: "{{ zone_id }}"
+                layer_id: "modifier_circadian_evening"
+                layer_name: "Circadian: Evening"
+                layer_type: "modifier"
+                priority: 44
+                is_on: false
+                brightness_pct_delta: -20
+                color_temp_kelvin_delta: -500
+                transition: 600  # 10 minute transition
+            
+            - service: lighting_manager.set_layer
+              data:
+                zone_id: "{{ zone_id }}"
+                layer_id: "modifier_circadian_bedtime"
+                layer_name: "Circadian: Bedtime"
+                layer_type: "modifier"
+                priority: 78  # Critical mode
+                is_on: false
+                brightness_pct_delta: -60
+                color_temp_kelvin_delta: -800
+                transition: 900  # 15 minute transition
+            
+            # Climate Modifiers (Priority 40-49)
+            - service: lighting_manager.set_layer
+              data:
+                zone_id: "{{ zone_id }}"
+                layer_id: "modifier_climate_heating"
+                layer_name: "Climate: Heating"
+                layer_type: "modifier"
+                priority: 42
+                is_on: false
+                brightness_pct_delta: -10
+                color_temp_kelvin_delta: -300
+                transition: 60
+            
+            - service: lighting_manager.set_layer
+              data:
+                zone_id: "{{ zone_id }}"
+                layer_id: "modifier_climate_cooling"
+                layer_name: "Climate: Cooling"
+                layer_type: "modifier"
+                priority: 43
+                is_on: false
+                brightness_pct_delta: 5
+                color_temp_kelvin_delta: 300
+                transition: 60
+            
+            # Manual Override Modifiers (Priority 90-99)
+            - service: lighting_manager.set_layer
+              data:
+                zone_id: "{{ zone_id }}"
+                layer_id: "modifier_manual_bright"
+                layer_name: "Manual: Bright"
+                layer_type: "modifier"
+                priority: 92
+                is_on: false
+                brightness_pct_delta: 50
+                transition: 2
+            
+            - service: lighting_manager.set_layer
+              data:
+                zone_id: "{{ zone_id }}"
+                layer_id: "modifier_manual_dim"
+                layer_name: "Manual: Dim"
+                layer_type: "modifier"
+                priority: 91
+                is_on: false
+                brightness_pct_delta: -50
+                transition: 3
+            
+            - service: lighting_manager.set_layer
+              data:
+                zone_id: "{{ zone_id }}"
+                layer_id: "modifier_manual_warm"
+                layer_name: "Manual: Warm"
+                layer_type: "modifier"
+                priority: 90
+                is_on: false
+                color_temp_kelvin_delta: -600
+                transition: 5
+            
+            - delay:
+                milliseconds: 100  # Small delay between zones to prevent overload
+      
+      # Fire completion event
+      - event: lighting_baseline_applied
+        event_data:
+          zones: "{{ zones }}"
+          timestamp: "{{ now().isoformat() }}"
+
+# Automation to automatically apply baseline on first setup
+automation:
+  - alias: "Lighting Auto Apply Baseline"
+    id: lighting_auto_apply_baseline
+    description: "Automatically apply baseline layers on first startup"
+    mode: single
+    
+    trigger:
+      # When system becomes ready
+      - platform: state
+        entity_id: input_boolean.lighting_manager_ready
+        to: "on"
+    
+    condition:
+      # Only run if no layers exist (first setup)
+      - condition: template
+        value_template: >
+          {% set zones = state_attr('sensor.lighting_manager_zones', 'zone_ids') | default([]) %}
+          {% if zones | length > 0 %}
+            {% set first_zone = zones[0] %}
+            {% set adaptive_exists = states('switch.' + first_zone + '_adaptive_layer') not in ['unknown', 'unavailable'] %}
+            {% set manual_exists = states('switch.' + first_zone + '_manual_layer') not in ['unknown', 'unavailable'] %}
+            {{ not (adaptive_exists or manual_exists) }}
+          {% else %}
+            false
+          {% endif %}
+    
+    action:
+      # Wait a moment for entities to stabilize
+      - delay:
+          seconds: 5
+      
+      # Run the baseline script
+      - service: script.lighting_apply_baseline_layers
+      
+      # Log the action
+      - service: system_log.write
+        data:
+          message: "Applied baseline modifier layers to all zones on first setup"
+          level: info
