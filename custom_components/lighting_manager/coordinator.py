@@ -231,9 +231,8 @@ class ZoneCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
                 f"manual control detected, created {override_id}"
             )
             
-            # Save layers (but not the temporary override)
-            await self.layer_manager.save()
-            
+            # The _on_layers_changed listener will handle saving
+            # This prevents race conditions and maintains single save path
             # Trigger update
             self._schedule_update("manual_override")
     
