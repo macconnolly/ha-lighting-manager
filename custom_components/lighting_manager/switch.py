@@ -256,14 +256,13 @@ class LayerSwitch(CoordinatorEntity[ZoneCoordinator], SwitchEntity):
         if ATTR_TRANSITION in kwargs:
             updates[ATTR_TRANSITION] = kwargs[ATTR_TRANSITION]
         
-        # Call layer_manager to update
-        if self.coordinator.layer_manager.update_layer(self.layer_id, updates):
-            # Save if needed
-            if self.coordinator.layer_manager.has_pending_save():
-                await self.coordinator.layer_manager.save()
-            
-            # Trigger coordinator update
-            self.coordinator.schedule_recalculation()
+        # Use single entry point pattern
+        success, action = self.coordinator.layer_manager.set_layer(self.layer_id, updates)
+        
+        if success:
+            # The coordinator's _on_layers_changed listener handles save and recalculation
+            # This follows the event-driven architecture pattern
+            pass
             
             # Fire event
             self.hass.bus.async_fire(
@@ -288,14 +287,16 @@ class LayerSwitch(CoordinatorEntity[ZoneCoordinator], SwitchEntity):
             _LOGGER.warning("Cannot deactivate locked layer %s", self.entity_id)
             return
         
-        # Call layer_manager to update
-        if self.coordinator.layer_manager.update_layer(self.layer_id, {ATTR_IS_ON: False}):
-            # Save if needed
-            if self.coordinator.layer_manager.has_pending_save():
-                await self.coordinator.layer_manager.save()
-            
-            # Trigger coordinator update
-            self.coordinator.schedule_recalculation()
+        # Use single entry point pattern
+        success, action = self.coordinator.layer_manager.set_layer(
+            self.layer_id, 
+            {ATTR_IS_ON: False}
+        )
+        
+        if success:
+            # The coordinator's _on_layers_changed listener handles save and recalculation
+            # This follows the event-driven architecture pattern
+            pass
             
             # Fire event
             self.hass.bus.async_fire(

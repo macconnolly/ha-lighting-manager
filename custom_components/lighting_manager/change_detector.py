@@ -164,8 +164,12 @@ class ChangeDetector:
             if "color_temp" in current_state:
                 override_layer[ATTR_COLOR_TEMP] = current_state["color_temp"]
         
-        # Create the layer
-        self.layer_manager.create_layer(override_id, override_layer)
+        # Use single entry point pattern
+        success, action = self.layer_manager.set_layer(override_id, override_layer)
+        
+        if not success:
+            _LOGGER.error("Failed to create manual override layer for zone %s", self.zone_id)
+            return None
         
         # Update tracking
         self.last_override_id = override_id

@@ -532,7 +532,8 @@ async def handle_activate_layer(hass: HomeAssistant, call: ServiceCall) -> Servi
     results = []
     for switch in switches:
         try:
-            success = switch.coordinator.layer_manager.update_layer(
+            # Use single entry point pattern
+            success, action = switch.coordinator.layer_manager.set_layer(
                 switch.layer_id,
                 activation_data
             )
@@ -590,7 +591,8 @@ async def handle_deactivate_layer(hass: HomeAssistant, call: ServiceCall) -> Ser
     results = []
     for switch in switches:
         try:
-            success = switch.coordinator.layer_manager.update_layer(
+            # Use single entry point pattern
+            success, action = switch.coordinator.layer_manager.set_layer(
                 switch.layer_id,
                 deactivation_data
             )
@@ -660,7 +662,8 @@ async def handle_update_layer(hass: HomeAssistant, call: ServiceCall) -> Service
     results = []
     for switch in switches:
         try:
-            success = switch.coordinator.layer_manager.update_layer(
+            # Use single entry point pattern
+            success, action = switch.coordinator.layer_manager.set_layer(
                 switch.layer_id,
                 update_data
             )
@@ -702,7 +705,8 @@ async def handle_set_layer_priority(hass: HomeAssistant, call: ServiceCall) -> S
     results = []
     for switch in switches:
         try:
-            success = switch.coordinator.layer_manager.update_layer(
+            # Use single entry point pattern
+            success, action = switch.coordinator.layer_manager.set_layer(
                 switch.layer_id,
                 {ATTR_PRIORITY: priority}
             )
@@ -738,7 +742,8 @@ async def handle_lock_layer(hass: HomeAssistant, call: ServiceCall) -> ServiceRe
     results = []
     for switch in switches:
         try:
-            success = switch.coordinator.layer_manager.update_layer(
+            # Use single entry point pattern
+            success, action = switch.coordinator.layer_manager.set_layer(
                 switch.layer_id,
                 {ATTR_LOCKED: True}
             )
@@ -777,7 +782,8 @@ async def handle_unlock_layer(hass: HomeAssistant, call: ServiceCall) -> Service
     results = []
     for switch in switches:
         try:
-            success = switch.coordinator.layer_manager.update_layer(
+            # Use single entry point pattern
+            success, action = switch.coordinator.layer_manager.set_layer(
                 switch.layer_id,
                 {ATTR_LOCKED: False}
             )
@@ -814,7 +820,8 @@ async def handle_force_layer(hass: HomeAssistant, call: ServiceCall) -> ServiceR
     
     try:
         coordinator = await _get_coordinator_from_call(hass, call)
-        success = coordinator.layer_manager.update_layer(
+        # Use single entry point pattern
+        success, action = coordinator.layer_manager.set_layer(
             layer_id,
             {ATTR_FORCE: force_value}
         )
@@ -853,7 +860,8 @@ async def handle_unforce_layer(hass: HomeAssistant, call: ServiceCall) -> Servic
     
     try:
         coordinator = await _get_coordinator_from_call(hass, call)
-        success = coordinator.layer_manager.update_layer(
+        # Use single entry point pattern
+        success, action = coordinator.layer_manager.set_layer(
             layer_id,
             {ATTR_FORCE: False}
         )
@@ -973,7 +981,8 @@ async def handle_reset_zone(hass: HomeAssistant, call: ServiceCall) -> ServiceRe
         
         for layer_id in list(coordinator.layers.keys()):
             if layer_id != LAYER_BASE_ADAPTIVE:
-                coordinator.layer_manager.update_layer(layer_id, {ATTR_IS_ON: False})
+                # Use single entry point pattern
+                success, action = coordinator.layer_manager.set_layer(layer_id, {ATTR_IS_ON: False})
         
         # Fire reset event
         hass.bus.async_fire(

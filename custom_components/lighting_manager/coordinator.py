@@ -102,6 +102,47 @@ class ZoneCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
         # Load layers from storage
         await self.layer_manager.load()
         
+        # Create default layers if none exist (better out-of-the-box experience)
+        if not self.layer_manager.layers:
+            _LOGGER.info("No layers found for zone %s, creating default layers", self.zone_id)
+            
+            # Create base adaptive layer if adaptive is enabled
+            if self.adaptive_provider.enabled:
+                success, action = self.layer_manager.set_layer(
+                    "adaptive",
+                    {
+                        "layer_name": "Adaptive Lighting",
+                        "is_on": True,
+                        "priority": 10,  # Low priority base layer
+                        "layer_type": "absolute",
+                        "source": "system.default",
+                        "description": "Automatic brightness and color based on sun position"
+                    }
+                )
+                if success:
+                    _LOGGER.info("Created default adaptive layer for zone %s", self.zone_id)
+            
+            # Create manual control layer (always present but inactive)
+            success, action = self.layer_manager.set_layer(
+                "manual",
+                {
+                    "layer_name": "Manual Control",
+                    "is_on": False,
+                    "priority": 90,  # High priority for manual control
+                    "layer_type": "absolute",
+                    "brightness": 255,
+                    "color_temp": 370,
+                    "source": "system.default",
+                    "description": "Direct manual control of lights"
+                }
+            )
+            if success:
+                _LOGGER.info("Created default manual layer for zone %s", self.zone_id)
+            
+            # Save the default layers
+            if self.layer_manager.has_pending_save():
+                await self.layer_manager.save()
+        
         # Set up component listeners
         self.layer_manager.add_listener(self._on_layers_changed)
         self.state_machine.add_listener(self._on_state_changed)
@@ -140,8 +181,19 @@ class ZoneCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
     
     @callback
     def _on_layers_changed(self) -> None:
-        """Handle layer changes - route to update."""
+        """Handle layer changes - save if needed and route to update.
+        
+        This is the ONLY place that should trigger saves and recalculations
+        when layers change, following the event-driven architecture.
+        """
         _LOGGER.debug("Layers changed in zone %s", self.zone_id)
+        
+        # Save if there are pending changes
+        if self.layer_manager.has_pending_save():
+            self.hass.async_create_task(self.layer_manager.save())
+            _LOGGER.debug("Scheduled save for zone %s layers", self.zone_id)
+        
+        # Schedule recalculation
         self._schedule_update("layer_change")
     
     @callback
