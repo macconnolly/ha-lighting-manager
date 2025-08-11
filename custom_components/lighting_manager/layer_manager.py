@@ -109,20 +109,34 @@ class LayerManager:
                 self.zone_id, err, exc_info=True
             )
     
-    def create_layer(self, layer_id: str, layer_data: Dict[str, Any]) -> None:
-        """Create a new layer.
+    def set_layer(self, layer_id: str, layer_data: Dict[str, Any]) -> tuple[bool, str]:
+        """Set (create or update) a layer - idempotent operation.
+        
+        This is THE SINGLE ENTRY POINT for all layer modifications.
+        
+        Args:
+            layer_id: Unique identifier for the layer
+            layer_data: Complete layer attributes
+            
+        Returns:
+            Tuple of (success, action) where action is 'created' or 'updated'
+        """
+        if layer_id in self.layers:
+            # Update existing layer
+            success = self._update_layer(layer_id, layer_data)
+            return (success, "updated" if success else "failed")
+        else:
+            # Create new layer
+            self._create_layer(layer_id, layer_data)
+            return (True, "created")
+    
+    def _create_layer(self, layer_id: str, layer_data: Dict[str, Any]) -> None:
+        """Internal method to create a new layer.
         
         Args:
             layer_id: Unique identifier for the layer
             layer_data: Layer attributes
         """
-        if layer_id in self.layers:
-            _LOGGER.warning(
-                "Layer %s already exists in zone %s, skipping creation",
-                layer_id, self.zone_id
-            )
-            return
-        
         # Add timestamps
         now = dt_util.now()
         layer_data[ATTR_CREATED_AT] = now.isoformat()
@@ -140,8 +154,21 @@ class LayerManager:
             layer_id, self.zone_id, len(layer_data)
         )
     
-    def update_layer(self, layer_id: str, updates: Dict[str, Any]) -> bool:
-        """Update an existing layer.
+    def create_layer(self, layer_id: str, layer_data: Dict[str, Any]) -> None:
+        """Legacy method - use set_layer instead.
+        
+        Kept for backward compatibility with change_detector.
+        """
+        if layer_id in self.layers:
+            _LOGGER.warning(
+                "Layer %s already exists in zone %s, skipping creation",
+                layer_id, self.zone_id
+            )
+            return
+        self._create_layer(layer_id, layer_data)
+    
+    def _update_layer(self, layer_id: str, updates: Dict[str, Any]) -> bool:
+        """Internal method to update an existing layer.
         
         Args:
             layer_id: Layer to update
@@ -172,6 +199,13 @@ class LayerManager:
             layer_id, self.zone_id, len(updates)
         )
         return True
+    
+    def update_layer(self, layer_id: str, updates: Dict[str, Any]) -> bool:
+        """Legacy method - use set_layer instead.
+        
+        Kept for backward compatibility.
+        """
+        return self._update_layer(layer_id, updates)
     
     def delete_layer(self, layer_id: str) -> bool:
         """Delete a layer.
