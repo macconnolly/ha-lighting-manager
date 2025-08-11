@@ -4,17 +4,5 @@
 homeassistant:
   # Include all the modifier packages
   packages:
-    # IMPORTANT: Load startup coordinator first
-    lighting_startup: !include packages/lighting_startup_delay.yaml
-    
-    # Zone configuration (creates adaptive base layers)
-    lighting_zones: !include packages/lighting_zones_auto_setup.yaml
-    
-    # Then load all modifier packages
-    lighting_weather: !include packages/lighting_modifier_weather.yaml
-    lighting_circadian: !include packages/lighting_modifier_circadian.yaml
-    lighting_activities: !include packages/lighting_modifier_activities.yaml
-    lighting_motion: !include packages/lighting_modifier_motion.yaml
-    lighting_presence: !include packages/lighting_modifier_presence.yaml
-    lighting_overrides: !include packages/lighting_modifier_manual_override.yaml
-    lighting_climate: !include packages/lighting_modifier_climate.yaml
+    # Zone configuration (simple, working version)
+    lighting_zones: !include packages/lighting_zones_config.yaml

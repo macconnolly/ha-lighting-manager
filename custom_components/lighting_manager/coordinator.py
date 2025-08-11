@@ -202,16 +202,34 @@ class ZoneCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             _LOGGER.error("Failed to load layers for zone %s: %s", self.zone_id, err)
             self.layers = {}
         
-        # Create default layer if no layers exist
+        # Create default layers if no layers exist
         if not self.layers:
-            await self.create_layer(
-                layer_name="Manual",
-                priority=50,
-                brightness=255,
-                color_temp=370,
-                transition=2.0
-            )
-            _LOGGER.info("Created default 'Manual' layer for zone %s", self.zone_id)
+            # Create essential layers for each zone
+            default_layers = [
+                {
+                    "layer_name": "Manual",
+                    "layer_id": "manual",
+                    "priority": 90,
+                    "brightness": 255,
+                    "color_temp": 370,
+                    "transition": 2.0,
+                    "is_on": False
+                },
+                {
+                    "layer_name": "Adaptive Base",
+                    "layer_id": "adaptive_base",
+                    "priority": 20,
+                    "brightness": 180,
+                    "color_temp": 370,
+                    "transition": 30.0,
+                    "is_on": True
+                }
+            ]
+            
+            for layer_config in default_layers:
+                layer_id = await self.create_layer(**layer_config)
+                _LOGGER.info("Created default '%s' layer for zone %s", 
+                           layer_config["layer_name"], self.zone_id)
         
         # Set up adaptive lighting if enabled
         await self._setup_adaptive()

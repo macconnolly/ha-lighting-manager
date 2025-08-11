@@ -19,15 +19,15 @@ template:
       - name: "Climate Sync Status"
         unique_id: climate_sync_status
         state: >
-          {% set hvac_action = state_attr('climate.thermostat', 'hvac_action') | default('idle') %}
+          {% set hvac_action = state_attr('climate.dining_room', 'hvac_action') | default('idle') %}
           {{ hvac_action }}
         attributes:
-          hvac_mode: "{{ states('climate.thermostat') }}"
-          current_temperature: "{{ state_attr('climate.thermostat', 'current_temperature') | round(1) }}"
-          target_temperature: "{{ state_attr('climate.thermostat', 'temperature') | round(1) }}"
+          hvac_mode: "{{ states('climate.dining_room') }}"
+          current_temperature: "{{ state_attr('climate.dining_room', 'current_temperature') | round(1) }}"
+          target_temperature: "{{ state_attr('climate.dining_room', 'temperature') | round(1) }}"
           
           color_temp_modifier: >
-            {% set action = state_attr('climate.thermostat', 'hvac_action') | default('idle') %}
+            {% set action = state_attr('climate.dining_room', 'hvac_action') | default('idle') %}
             {% if action == 'heating' %}
               -400  {# Warmer light when heating #}
             {% elif action == 'cooling' %}
@@ -61,7 +61,7 @@ automation:
     trigger:
       # React to HVAC action changes
       - platform: state
-        entity_id: climate.thermostat
+        entity_id: climate.dining_room
         attribute: hvac_action
       
       # React to enable/disable
