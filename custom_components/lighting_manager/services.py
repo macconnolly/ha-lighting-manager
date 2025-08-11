@@ -205,6 +205,46 @@ SERVICE_CREATE_LAYER_SCHEMA = vol.Schema({
 })
 
 
+async def handle_create_zone(hass: HomeAssistant, call: ServiceCall) -> None:
+    """Handle the create_zone service call to programmatically create a zone."""
+    zone_name = call.data.get("zone_name")
+    light_entities = call.data.get("light_entities", [])
+    
+    # Create zone_id from zone_name
+    from homeassistant.util import slugify
+    zone_id = slugify(zone_name)
+    
+    # Check if zone already exists
+    for entry in hass.config_entries.async_entries(DOMAIN):
+        if entry.data.get("zone_id") == zone_id:
+            _LOGGER.warning("Zone %s already exists", zone_id)
+            return
+    
+    # Create config entry directly
+    config_entry = hass.config_entries.async_create_entry(
+        domain=DOMAIN,
+        title=zone_name,
+        data={
+            "zone_id": zone_id,
+            "zone_name": zone_name,
+            "area_id": None,
+        },
+        options={
+            "light_entities": light_entities,
+            "adaptive_enabled": True,
+            "adaptive_min_brightness": 30,
+            "adaptive_max_brightness": 100,
+            "adaptive_min_color_temp": 2200,
+            "adaptive_max_color_temp": 4000,
+        }
+    )
+    
+    # Trigger setup
+    await hass.config_entries.async_setup(config_entry.entry_id)
+    
+    _LOGGER.info("Created zone %s with %d lights", zone_name, len(light_entities))
+
+
 async def async_setup_services(hass: HomeAssistant) -> None:
     """Register all Phase 3 services."""
     
@@ -216,6 +256,10 @@ async def async_setup_services(hass: HomeAssistant) -> None:
     services = [
         # Primary Layer Services
         (SERVICE_SET_LAYER, handle_set_layer, SERVICE_SET_LAYER_SCHEMA),
+        # Zone Control Services  
+        ("delete_zone", handle_delete_zone, vol.Schema({
+            vol.Required("zone_id"): cv.string,
+        })),
         ("create_layer", handle_create_layer, SERVICE_CREATE_LAYER_SCHEMA),
         
         # Legacy Layer Control Services (kept for compatibility)
@@ -253,6 +297,18 @@ async def async_setup_services(hass: HomeAssistant) -> None:
             supports_response=SupportsResponse.OPTIONAL,
         )
         _LOGGER.info("Registered service: %s.%s", DOMAIN, service_name)
+    
+    # Register create_zone service for programmatic zone creation
+    hass.services.async_register(
+        DOMAIN, 
+        "create_zone", 
+        handle_create_zone,
+        schema=vol.Schema({
+            vol.Required("zone_name"): cv.string,
+            vol.Optional("light_entities", default=[]): cv.ensure_list,
+        })
+    )
+    _LOGGER.info("Registered service: %s.create_zone", DOMAIN)
     
     # Mark as registered
     if DOMAIN not in hass.data:
@@ -470,10 +526,7 @@ async def handle_set_layer(hass: HomeAssistant, call: ServiceCall) -> ServiceRes
         try:
             validated_attributes = validate_layer_payload(attributes)
         except ValueError as e:
-            return ServiceResponse(
-                iserr=True,
-                data={"error": f"Invalid layer configuration: {str(e)}"}
-            )
+            raise ServiceValidationError(f"Invalid layer configuration: {str(e)}")
         
         # Check if layer exists
         existing_layer = coordinator.get_layer(layer_id)
@@ -483,11 +536,15 @@ async def handle_set_layer(hass: HomeAssistant, call: ServiceCall) -> ServiceRes
             success = await coordinator.update_layer(layer_id, **validated_attributes)
             action = "updated"
         else:
-            # Create new layer
+            # Create new layer - remove layer_name and priority from dict to avoid duplicates
+            create_attrs = validated_attributes.copy()
+            layer_name = create_attrs.pop(ATTR_LAYER_NAME, layer_id)
+            priority = create_attrs.pop(ATTR_PRIORITY, DEFAULT_PRIORITY)
+            
             created_id = await coordinator.create_layer(
-                layer_name=validated_attributes.get(ATTR_LAYER_NAME, layer_id),
-                priority=validated_attributes.get(ATTR_PRIORITY, DEFAULT_PRIORITY),
-                **validated_attributes
+                layer_name=layer_name,
+                priority=priority,
+                **create_attrs
             )
             success = created_id == layer_id
             action = "created"
@@ -505,28 +562,19 @@ async def handle_set_layer(hass: HomeAssistant, call: ServiceCall) -> ServiceRes
                     }
                 )
         
-        return ServiceResponse(
-            iserr=False,
-            data={
-                "success": success,
-                "zone_id": zone_id,
-                "layer_id": layer_id,
-                "action": action,
-                "layer_type": layer_type,
-            }
-        )
+        return {
+            "success": success,
+            "zone_id": zone_id,
+            "layer_id": layer_id,
+            "action": action,
+            "layer_type": layer_type,
+        }
         
-    except ServiceValidationError as e:
-        return ServiceResponse(
-            iserr=True,
-            data={"error": str(e)}
-        )
+    except ServiceValidationError:
+        raise  # Re-raise the validation error
     except Exception as e:
         _LOGGER.error("Failed to set layer %s in zone %s: %s", layer_id, zone_id, e)
-        return ServiceResponse(
-            iserr=True,
-            data={"error": f"Unexpected error: {str(e)}"}
-        )
+        raise HomeAssistantError(f"Failed to set layer: {str(e)}")
 
 
 async def handle_activate_layer(hass: HomeAssistant, call: ServiceCall) -> ServiceResponse:
@@ -941,6 +989,49 @@ async def handle_recalculate_zone(hass: HomeAssistant, call: ServiceCall) -> Ser
             iserr=True,
             data={"error": str(e)}
         )
+
+
+async def handle_delete_zone(hass: HomeAssistant, call: ServiceCall) -> ServiceResponse:
+    """Delete a zone and clean up all related entities."""
+    zone_id = call.data["zone_id"]
+    
+    # Find the config entry for this zone
+    config_entry = None
+    for entry in hass.config_entries.async_entries(DOMAIN):
+        if entry.data.get("zone_id") == zone_id:
+            config_entry = entry
+            break
+    
+    if not config_entry:
+        raise ServiceValidationError(f"Zone {zone_id} not found")
+    
+    try:
+        # Remove the config entry (which will trigger async_unload_entry)
+        await hass.config_entries.async_remove(config_entry.entry_id)
+        
+        # Clean up any leftover entities
+        entity_registry = er.async_get(hass)
+        entries_to_remove = []
+        
+        # Find all entities related to this zone
+        for entity_id, entry in entity_registry.entities.items():
+            if zone_id in entity_id:
+                entries_to_remove.append(entity_id)
+        
+        # Remove found entities
+        for entity_id in entries_to_remove:
+            entity_registry.async_remove(entity_id)
+            _LOGGER.info("Removed entity: %s", entity_id)
+        
+        return {
+            "zone_id": zone_id,
+            "success": True,
+            "entities_removed": len(entries_to_remove),
+            "message": f"Zone {zone_id} deleted successfully"
+        }
+    except Exception as e:
+        _LOGGER.error("Failed to delete zone %s: %s", zone_id, e)
+        raise HomeAssistantError(f"Failed to delete zone: {str(e)}")
 
 
 async def handle_reset_zone(hass: HomeAssistant, call: ServiceCall) -> ServiceResponse:

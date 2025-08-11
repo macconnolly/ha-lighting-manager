@@ -1,8 +1,8 @@
-"""Zone coordinator for Lighting Manager - Golden Path implementation.
+'''Zone coordinator for Lighting Manager - Golden Path implementation.
 
 CRITICAL: This coordinator is the single source of truth for all layer state.
 The 'data' property returns a deep copy of layers to prevent external mutation.
-"""
+'''
 from __future__ import annotations
 
 import asyncio
@@ -44,6 +44,8 @@ from .const import (
     CONF_ADAPTIVE_COLOR_TEMP_MAX,
     CONF_ADAPTIVE_COLOR_TEMP_MIN,
     CONF_ADAPTIVE_ENABLED,
+    CONF_ADAPTIVE_ELEVATION_MAX,
+    CONF_ADAPTIVE_ELEVATION_MIN,
     DEBOUNCE_SECONDS,
     DEFAULT_PRIORITY,
     DEFAULT_TRANSITION,
@@ -188,6 +190,36 @@ class ZoneCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         
         return self.data
 
+    def _calculate_initial_adaptive_factor(self) -> float:
+        """Calculate the initial adaptive factor from sun elevation to avoid startup race conditions."""
+        sun_state = self.hass.states.get("sun.sun")
+        if not sun_state or "elevation" not in sun_state.attributes:
+            _LOGGER.debug("Sun state or elevation not available for initial factor calculation.")
+            return 0.5  # Default to a neutral value
+
+        elevation = sun_state.attributes["elevation"]
+        
+        # Get adaptive elevation range from config options
+        min_elevation = self.config_entry.options.get(CONF_ADAPTIVE_ELEVATION_MIN, -6)
+        max_elevation = self.config_entry.options.get(CONF_ADAPTIVE_ELEVATION_MAX, 15)
+
+        range_size = max_elevation - min_elevation
+        if range_size <= 0:
+            return 0.5
+
+        # Clamp the elevation to the configured range
+        clamped_elevation = max(min_elevation, min(max_elevation, elevation))
+        
+        # Formula: factor is 1.0 at min_elevation (night) and 0.0 at max_elevation (day)
+        factor = 1.0 - ((clamped_elevation - min_elevation) / range_size)
+        
+        _LOGGER.debug(
+            "Calculated initial adaptive factor: %.3f from elevation %.1f",
+            factor,
+            elevation,
+        )
+        return factor
+
     async def async_load(self) -> None:
         """Load stored layer data from disk."""
         try:
@@ -202,75 +234,19 @@ class ZoneCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             _LOGGER.error("Failed to load layers for zone %s: %s", self.zone_id, err)
             self.layers = {}
         
-        # Create default layers if no layers exist
+        # Create default 'manual' layer if no layers exist at all
         if not self.layers:
-            # Create essential layers for each zone
-            # Manual layer for direct control
-            default_layers = [
-                {
-                    "layer_name": "Manual",
-                    "layer_id": "manual", 
-                    "priority": 90,
-                    "brightness": 255,
-                    "color_temp": 370,
-                    "transition": 2.0,
-                    "is_on": False
-                },
-            ]
-            
-            # Only create Adaptive Base layer if adaptive is enabled
-            if self.config_entry.options.get(CONF_ADAPTIVE_ENABLED, False):
-                # Calculate adaptive values based on sun position
-                sun_state = self.hass.states.get("sun.sun")
-                sun_elevation = -6  # Default to night if sun unavailable
-                if sun_state:
-                    sun_elevation = sun_state.attributes.get("elevation", -6)
-                
-                # Get zone-specific brightness/color settings from options
-                options = self.config_entry.options
-                min_brightness_pct = options.get("min_brightness_pct", 15)
-                max_brightness_pct = options.get("max_brightness_pct", 100)
-                min_kelvin = options.get("min_kelvin", 2200)
-                max_kelvin = options.get("max_kelvin", 4000)
-                
-                # Calculate adaptive values based on sun elevation
-                if sun_elevation < -6:
-                    # Night time
-                    brightness_pct = min_brightness_pct
-                    kelvin = min_kelvin
-                elif sun_elevation > 10:
-                    # Day time
-                    brightness_pct = max_brightness_pct
-                    kelvin = max_kelvin
-                else:
-                    # Transition period
-                    ratio = (sun_elevation + 6) / 16
-                    brightness_pct = min_brightness_pct + (max_brightness_pct - min_brightness_pct) * ratio
-                    kelvin = min_kelvin + (max_kelvin - min_kelvin) * ratio
-                
-                # Convert to HA values
-                brightness = int(brightness_pct * 255 / 100)
-                color_temp = int(1000000 / kelvin)  # Convert Kelvin to mireds
-                
-                _LOGGER.info("Zone %s: Sun elevation %.1f°, adaptive brightness %d%% (%d/255), color %dK (%d mireds)",
-                            self.zone_id, sun_elevation, brightness_pct, brightness, int(kelvin), color_temp)
-                
-                default_layers.append({
-                    "layer_name": "Adaptive Base",
-                    "layer_id": "adaptive_base",
-                    "priority": 20,
-                    "brightness": brightness,  # Use calculated value
-                    "color_temp": color_temp,  # Use calculated value
-                    "transition": 30.0,
-                    "is_on": False  # Start OFF to not override on startup
-                })
-            
-            for layer_config in default_layers:
-                layer_id = await self.create_layer(**layer_config)
-                _LOGGER.info("Created default '%s' layer for zone %s", 
-                           layer_config["layer_name"], self.zone_id)
-        
-        # Set up adaptive lighting if enabled
+            await self.create_layer(
+                layer_name="Manual",
+                priority=50,
+                is_on=False,
+                brightness=255,
+                color_temp=370,
+                transition=2.0,
+            )
+            _LOGGER.info("Created default 'Manual' layer for zone %s", self.zone_id)
+
+        # Set up adaptive lighting, which will create/update the adaptive layer
         await self._setup_adaptive()
         
         # Start background task for layer cleanup
@@ -325,7 +301,7 @@ class ZoneCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         This modifies state, so it cannot be a @callback method.
         """
         # Validate layer name
-        layer_id = validate_layer_name(layer_name)
+        layer_id = attributes.get("layer_id", validate_layer_name(layer_name))
         
         if layer_id in self.layers:
             _LOGGER.warning("Layer %s already exists in zone %s", layer_id, self.zone_id)
@@ -335,7 +311,7 @@ class ZoneCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         now = get_timezone_aware_now()
         self.layers[layer_id] = {
             ATTR_LAYER_NAME: layer_name,  # Original name for display
-            ATTR_IS_ON: False,
+            ATTR_IS_ON: attributes.get(ATTR_IS_ON, False),
             ATTR_PRIORITY: validate_priority(priority),
             ATTR_BRIGHTNESS: validate_brightness(attributes.get(ATTR_BRIGHTNESS)),
             ATTR_COLOR_TEMP: validate_color_temp(attributes.get(ATTR_COLOR_TEMP)),
@@ -656,37 +632,45 @@ class ZoneCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     
     async def _setup_adaptive(self) -> None:
         """Set up adaptive lighting integration."""
-        # Check if adaptive is enabled
         self._adaptive_enabled = self.config_entry.options.get(
             CONF_ADAPTIVE_ENABLED, False
         )
         
         if not self._adaptive_enabled:
-            # Remove base_adaptive layer if it exists
             if LAYER_BASE_ADAPTIVE in self.layers:
                 self.layers[LAYER_BASE_ADAPTIVE][ATTR_IS_ON] = False
-                await self.save_layers()
+                self.schedule_save()
             return
         
         _LOGGER.info("Setting up adaptive lighting for zone %s", self.zone_id)
         
-        # Track sun position changes
-        @callback
-        def on_sun_change(event):
-            """Handle sun position changes."""
-            _LOGGER.debug("Sun position changed for zone %s", self.zone_id)
-            self.hass.async_create_task(self._update_adaptive_layer())
+        # Perform our own initial calculation to avoid race condition with sensor
+        self._adaptive_factor = self._calculate_initial_adaptive_factor()
         
-        # Remove old listener if exists
+        # Set up listener to track the sensor for ongoing updates
+        sensor_id = f"sensor.{self.zone_id}_adaptive_factor"
+        
+        @callback
+        def on_adaptive_change(event):
+            """Handle adaptive factor changes from the sensor."""
+            new_state = event.data.get("new_state")
+            if new_state and new_state.state not in (STATE_UNAVAILABLE, STATE_UNKNOWN):
+                try:
+                    self._adaptive_factor = float(new_state.state)
+                    _LOGGER.debug("Adaptive factor changed to %.3f for zone %s", 
+                                 self._adaptive_factor, self.zone_id)
+                    self.hass.async_create_task(self._update_adaptive_layer())
+                except (ValueError, TypeError):
+                    _LOGGER.warning("Invalid adaptive factor value: %s", new_state.state)
+        
         if self._adaptive_listener:
             self._adaptive_listener()
         
-        # Track sun.sun entity for elevation changes
         self._adaptive_listener = async_track_state_change_event(
-            self.hass, "sun.sun", on_sun_change
+            self.hass, sensor_id, on_adaptive_change
         )
         
-        # Initialize adaptive layer with current sun position
+        # Initialize or update the adaptive layer with the correct initial values
         await self._update_adaptive_layer()
     
     async def _update_adaptive_layer(self) -> None:
@@ -694,82 +678,58 @@ class ZoneCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if not self._adaptive_enabled:
             return
         
-        # Calculate adaptive values based on sun position
-        sun_state = self.hass.states.get("sun.sun")
-        sun_elevation = -6  # Default to night if sun unavailable
-        if sun_state:
-            sun_elevation = sun_state.attributes.get("elevation", -6)
-        
-        # Get zone-specific brightness/color settings from options
+        # Get config values
         options = self.config_entry.options
-        min_brightness_pct = options.get("min_brightness_pct", 15)
-        max_brightness_pct = options.get("max_brightness_pct", 100)
-        min_kelvin = options.get("min_kelvin", 2200)
-        max_kelvin = options.get("max_kelvin", 4000)
+        min_brightness = options.get(CONF_ADAPTIVE_BRIGHTNESS_MIN, 10)
+        max_brightness = options.get(CONF_ADAPTIVE_BRIGHTNESS_MAX, 255)
+        min_color = options.get(CONF_ADAPTIVE_COLOR_TEMP_MIN, 153)
+        max_color = options.get(CONF_ADAPTIVE_COLOR_TEMP_MAX, 500)
         
-        # Get elevation thresholds
-        elevation_min = options.get(CONF_ADAPTIVE_ELEVATION_MIN, -6)
-        elevation_max = options.get(CONF_ADAPTIVE_ELEVATION_MAX, 10)
-        
-        # Calculate adaptive values based on sun elevation
-        if sun_elevation <= elevation_min:
-            # Night time
-            brightness_pct = min_brightness_pct
-            kelvin = min_kelvin
-        elif sun_elevation >= elevation_max:
-            # Day time
-            brightness_pct = max_brightness_pct
-            kelvin = max_kelvin
-        else:
-            # Transition period - linear interpolation
-            ratio = (sun_elevation - elevation_min) / (elevation_max - elevation_min)
-            brightness_pct = min_brightness_pct + (max_brightness_pct - min_brightness_pct) * ratio
-            kelvin = min_kelvin + (max_kelvin - min_kelvin) * ratio
-        
-        # Convert to HA values
-        brightness = int(brightness_pct * 255 / 100)
-        color_temp = int(1000000 / kelvin)  # Convert Kelvin to mireds
+        # Calculate actual values based on factor
+        # Factor: 0 = day (bright/cool), 1 = night (dim/warm)
+        brightness = int(
+            max_brightness - (self._adaptive_factor * (max_brightness - min_brightness))
+        )
+        color_temp = int(
+            min_color + (self._adaptive_factor * (max_color - min_color))
+        )
         
         _LOGGER.debug(
-            "Updating adaptive layer for %s: sun elevation=%.1f°, brightness=%d%% (%d/255), color=%dK (%d mireds)",
-            self.zone_id, sun_elevation, brightness_pct, brightness, int(kelvin), color_temp
+            "Updating adaptive layer for %s: factor=%.3f, brightness=%s, color_temp=%s",
+            self.zone_id, self._adaptive_factor, brightness, color_temp
         )
         
         # Update or create base_adaptive layer
         now = get_timezone_aware_now()
         
+        # CRITICAL FIX: Default is_on to False. The adaptive layer should only be turned
+        # on explicitly by an automation or service call, not by default.
+        is_on_state = self.layers.get(LAYER_BASE_ADAPTIVE, {}).get(ATTR_IS_ON, False)
+
+        layer_data = {
+            ATTR_LAYER_NAME: "Adaptive Baseline",
+            ATTR_IS_ON: is_on_state,
+            ATTR_PRIORITY: 0,
+            ATTR_BRIGHTNESS: brightness,
+            ATTR_COLOR_TEMP: color_temp,
+            ATTR_TRANSITION: 30.0,
+            ATTR_LOCKED: True,
+            ATTR_SOURCE: "system",
+            ATTR_LAST_MODIFIED: now,
+            "adaptive_factor": self._adaptive_factor,
+        }
+        
         if LAYER_BASE_ADAPTIVE not in self.layers:
-            self.layers[LAYER_BASE_ADAPTIVE] = {
-                ATTR_LAYER_NAME: "Adaptive Baseline",
-                ATTR_IS_ON: True,  # Adaptive layer should be on when adaptive is enabled
-                ATTR_PRIORITY: 0,  # Lowest priority
-                ATTR_BRIGHTNESS: brightness,
-                ATTR_COLOR_TEMP: color_temp,
-                ATTR_TRANSITION: 30.0,  # Smooth transitions for adaptive changes
-                ATTR_LOCKED: True,  # System-managed
-                ATTR_SOURCE: "system",
-                ATTR_CREATED_AT: now,
-                ATTR_LAST_MODIFIED: now,
-                "sun_elevation": sun_elevation,
-                "brightness_pct": brightness_pct,
-                "color_kelvin": int(kelvin),
-            }
+            layer_data[ATTR_CREATED_AT] = now
+            self.layers[LAYER_BASE_ADAPTIVE] = layer_data
             _LOGGER.info("Created base_adaptive layer for zone %s", self.zone_id)
         else:
-            self.layers[LAYER_BASE_ADAPTIVE].update({
-                ATTR_IS_ON: True,
-                ATTR_BRIGHTNESS: brightness,
-                ATTR_COLOR_TEMP: color_temp,
-                ATTR_LAST_MODIFIED: now,
-                "sun_elevation": sun_elevation,
-                "brightness_pct": brightness_pct,
-                "color_kelvin": int(kelvin),
-            })
+            self.layers[LAYER_BASE_ADAPTIVE].update(layer_data)
         
         # Save and trigger update using the standard debounced methods
         self.schedule_save()
         self.schedule_recalculation()
-    
+
     async def async_shutdown(self) -> None:
         """Clean up when coordinator is being removed."""
         # Remove adaptive listener

@@ -364,6 +364,18 @@ unforce_layer:
         text:
 
 # Zone Control Services
+delete_zone:
+  name: Delete Zone
+  description: Delete a zone and clean up all related entities
+  fields:
+    zone_id:
+      name: Zone ID
+      description: The zone to delete
+      required: true
+      example: "living_room"
+      selector:
+        text:
+
 recalculate_zone:
   name: Recalculate Zone
   description: Force immediate recalculation of zone lighting state

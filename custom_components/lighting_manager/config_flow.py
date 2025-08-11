@@ -68,7 +68,31 @@ class LightingManagerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             if not light_entities:
                 errors["base"] = "no_lights"
             
+            # Validate brightness range
+            min_brightness_pct = user_input.get("min_brightness_pct", 15)
+            max_brightness_pct = user_input.get("max_brightness_pct", 100)
+            if min_brightness_pct >= max_brightness_pct:
+                errors["base"] = "invalid_brightness_range"
+            
+            # Validate color temp range
+            min_kelvin = user_input.get("min_color_temp_kelvin", 2200)
+            max_kelvin = user_input.get("max_color_temp_kelvin", 4000)
+            if min_kelvin >= max_kelvin:
+                errors["base"] = "invalid_color_temp_range"
+            
             if not errors:
+                # Convert percentage to 0-255 for brightness
+                min_brightness_pct = user_input.get("min_brightness_pct", 15)
+                max_brightness_pct = user_input.get("max_brightness_pct", 100)
+                min_brightness = int(min_brightness_pct * 255 / 100)
+                max_brightness = int(max_brightness_pct * 255 / 100)
+                
+                # Convert Kelvin to mireds for color temp
+                min_kelvin = user_input.get("min_color_temp_kelvin", 2200)
+                max_kelvin = user_input.get("max_color_temp_kelvin", 4000)
+                min_mireds = int(1000000 / max_kelvin)  # Note: inverted
+                max_mireds = int(1000000 / min_kelvin)  # Note: inverted
+                
                 # Create config entry with proper data/options split
                 return self.async_create_entry(
                     title=zone_name,
@@ -80,17 +104,22 @@ class LightingManagerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     options={
                         "light_entities": light_entities,  # User-configurable
                         "default_transition": DEFAULT_TRANSITION,
-                        CONF_ADAPTIVE_ENABLED: False,
-                        CONF_ADAPTIVE_BRIGHTNESS_MIN: 10,
-                        CONF_ADAPTIVE_BRIGHTNESS_MAX: 255,
-                        CONF_ADAPTIVE_COLOR_TEMP_MIN: 153,  # Mireds (warm)
-                        CONF_ADAPTIVE_COLOR_TEMP_MAX: 500,  # Mireds (cool)
+                        CONF_ADAPTIVE_ENABLED: True,  # Enable by default
+                        CONF_ADAPTIVE_BRIGHTNESS_MIN: min_brightness,
+                        CONF_ADAPTIVE_BRIGHTNESS_MAX: max_brightness,
+                        CONF_ADAPTIVE_COLOR_TEMP_MIN: min_mireds,
+                        CONF_ADAPTIVE_COLOR_TEMP_MAX: max_mireds,
                         CONF_ADAPTIVE_ELEVATION_MIN: -6,
                         CONF_ADAPTIVE_ELEVATION_MAX: 15,
+                        # Store original values for reference
+                        "min_brightness_pct": min_brightness_pct,
+                        "max_brightness_pct": max_brightness_pct,
+                        "min_kelvin": min_kelvin,
+                        "max_kelvin": max_kelvin,
                     },
                 )
 
-        # Show form
+        # Show form with brightness and color temp settings
         return self.async_show_form(
             step_id="user",
             data_schema=vol.Schema(
@@ -101,6 +130,18 @@ class LightingManagerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                             domain=LIGHT_DOMAIN,
                             multiple=True,
                         )
+                    ),
+                    vol.Optional("min_brightness_pct", default=15): vol.All(
+                        vol.Coerce(int), vol.Range(min=1, max=100)
+                    ),
+                    vol.Optional("max_brightness_pct", default=100): vol.All(
+                        vol.Coerce(int), vol.Range(min=1, max=100)
+                    ),
+                    vol.Optional("min_color_temp_kelvin", default=2200): vol.All(
+                        vol.Coerce(int), vol.Range(min=1500, max=6500)
+                    ),
+                    vol.Optional("max_color_temp_kelvin", default=4000): vol.All(
+                        vol.Coerce(int), vol.Range(min=1500, max=6500)
                     ),
                 }
             ),

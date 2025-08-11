@@ -74,8 +74,10 @@ script:
               data:
                 zone_id: "{{ zone_id }}"
                 layer_name: "Adaptive Base"
+                layer_id: "adaptive_base"
                 layer_type: "absolute"
                 priority: 20
+                is_on: true
                 brightness: >
                   {% set sun_elevation = state_attr('sun.sun', 'elevation') | float(0) %}
                   {% set min_b = config.min_brightness_pct %}
@@ -104,31 +106,21 @@ script:
                     {{ (1000000 / kelvin) | int }}
                   {% endif %}
                 transition: 30
-                is_on: true
+              continue_on_error: true
             
             # Configure manual layer (for override)
             - service: lighting_manager.set_layer
               data:
                 zone_id: "{{ zone_id }}"
                 layer_name: "Manual Control"
+                layer_id: "manual"
                 layer_type: "absolute"
                 priority: 90
+                is_on: false
                 brightness: "{{ ((config.min_brightness_pct + config.max_brightness_pct) / 2 * 255 / 100) | int }}"
                 color_temp: "{{ (1000000 / ((config.min_kelvin + config.max_kelvin) / 2)) | int }}"
                 transition: 2
-                is_on: false
-            
-            # Configure sleep layer
-            - service: lighting_manager.set_layer
-              data:
-                zone_id: "{{ zone_id }}"
-                layer_name: "Sleep Mode"
-                layer_type: "absolute"
-                priority: 80
-                brightness: "{{ (config.sleep_brightness_pct * 255 / 100) | int }}"
-                color_temp: "{{ (1000000 / config.sleep_kelvin) | int }}"
-                transition: 60
-                is_on: false
+              continue_on_error: true
             
             - delay:
                 milliseconds: 500
@@ -226,5 +218,10 @@ automation:
       - platform: state
         entity_id: sun.sun
         attribute: elevation
+    condition:
+      # Ensure the lighting manager is ready
+      - condition: template
+        value_template: >
+          {{ states('sensor.lighting_manager_zones') not in ['unknown', 'unavailable'] }}
     action:
       - service: script.update_adaptive_layers

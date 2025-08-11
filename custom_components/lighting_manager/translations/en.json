@@ -6,17 +6,27 @@
         "description": "Set up a new lighting zone with layered control",
         "data": {
           "zone_name": "Zone Name",
-          "light_entities": "Lights"
+          "light_entities": "Lights",
+          "min_brightness_pct": "Minimum Brightness (%)",
+          "max_brightness_pct": "Maximum Brightness (%)",
+          "min_color_temp_kelvin": "Warmest Color (Kelvin)",
+          "max_color_temp_kelvin": "Coolest Color (Kelvin)"
         },
         "data_description": {
           "zone_name": "Display name for this lighting zone",
-          "light_entities": "Select lights to control in this zone"
+          "light_entities": "Select lights to control in this zone",
+          "min_brightness_pct": "Minimum brightness as percentage (1-100)",
+          "max_brightness_pct": "Maximum brightness as percentage (1-100)",
+          "min_color_temp_kelvin": "Warmest color temperature in Kelvin (2200 = very warm)",
+          "max_color_temp_kelvin": "Coolest color temperature in Kelvin (5000 = daylight)"
         }
       }
     },
     "error": {
       "duplicate_zone": "A zone with this name already exists",
       "no_lights": "Please select at least one light",
+      "invalid_brightness_range": "Minimum brightness must be less than maximum brightness",
+      "invalid_color_temp_range": "Minimum color temperature must be less than maximum color temperature",
       "unknown": "Unexpected error"
     },
     "abort": {
@@ -27,10 +37,29 @@
     "step": {
       "init": {
         "title": "Zone Settings",
-        "description": "Configure zone behavior",
+        "description": "Choose what to configure",
+        "menu_options": {
+          "basic": "Basic Settings",
+          "advanced": "Advanced Settings",
+          "modifier": "Modifier Settings"
+        }
+      },
+      "basic": {
+        "title": "Basic Settings",
+        "description": "Configure lights and transition",
         "data": {
           "light_entities": "Lights",
-          "default_transition": "Default Transition Time (seconds)",
+          "default_transition": "Default Transition Time (seconds)"
+        },
+        "data_description": {
+          "light_entities": "Select lights to control in this zone",
+          "default_transition": "How long light changes should take (0-300 seconds)"
+        }
+      },
+      "advanced": {
+        "title": "Advanced Settings",
+        "description": "Configure adaptive lighting",
+        "data": {
           "adaptive_enabled": "Enable Adaptive Lighting",
           "adaptive_brightness_min": "Minimum Brightness (night)",
           "adaptive_brightness_max": "Maximum Brightness (day)",
@@ -47,6 +76,20 @@
           "adaptive_color_temp_max": "Color temperature during day in mireds",
           "adaptive_elevation_min": "Sun elevation below this = night mode (typically -6)",
           "adaptive_elevation_max": "Sun elevation above this = day mode (typically 15)"
+        }
+      },
+      "modifier": {
+        "title": "Modifier Settings",
+        "description": "Configure modifier layer behavior",
+        "data": {
+          "enable_weather_modifiers": "Enable Weather Modifiers",
+          "enable_occupancy_modifiers": "Enable Occupancy Modifiers",
+          "enable_climate_modifiers": "Enable Climate Modifiers"
+        },
+        "data_description": {
+          "enable_weather_modifiers": "Adjust lighting based on weather conditions",
+          "enable_occupancy_modifiers": "Adjust lighting based on room occupancy",
+          "enable_climate_modifiers": "Adjust lighting based on HVAC operation"
         }
       }
     }

@@ -1,0 +1,99 @@
+# Automated Zone Creation for Lighting Manager
+# This creates zones programmatically by directly calling the config flow
+
+script:
+  create_all_lighting_zones:
+    alias: "Create All Lighting Zones Programmatically"
+    mode: single
+    sequence:
+      # Define all zones to create
+      - variables:
+          zones_to_create:
+            - zone_name: "Main Living"
+              lights:
+                - light.living_room_couch_lamp
+                - light.living_room_floor_lamp
+                - light.office_desk_lamp
+                - light.entryway_lamp
+                - light.living_room_corner_accent
+                - light.cradenza_accent
+              
+            - zone_name: "Bedroom Primary"
+              lights:
+                - light.master_bedroom_table_lamps
+                - light.master_bedroom_corner_accent
+              
+            - zone_name: "Accent Spots"
+              lights:
+                - light.dining_room_spot_lights
+                - light.living_room_spot_lights
+              
+            - zone_name: "Recessed Ceiling"
+              lights:
+                - light.kitchen_main_lights
+                - light.living_room_hallway_lights
+      
+      # Check which zones already exist
+      - variables:
+          existing_zones: "{{ state_attr('sensor.lighting_manager_zones', 'zone_ids') | default([]) }}"
+      
+      # Create each zone
+      - repeat:
+          for_each: "{{ zones_to_create }}"
+          sequence:
+            - variables:
+                zone_name: "{{ repeat.item.zone_name }}"
+                zone_id: "{{ zone_name | lower | replace(' ', '_') }}"
+                light_entities: "{{ repeat.item.lights }}"
+            
+            # Skip if zone already exists
+            - condition: template
+              value_template: "{{ zone_id not in existing_zones }}"
+            
+            # Use the websocket API to create config entry
+            - service: rest_command.create_lighting_zone
+              data:
+                zone_name: "{{ zone_name }}"
+                light_entities: "{{ light_entities }}"
+            
+            - delay:
+                seconds: 2
+      
+      # Notification
+      - service: persistent_notification.create
+        data:
+          title: "Zone Creation Complete"
+          message: "Created lighting zones. Check Settings → Integrations → Lighting Manager"
+
+# REST command to create zones via internal API
+rest_command:
+  create_lighting_zone:
+    url: "http://localhost:8123/api/config/config_entries/flow"
+    method: POST
+    headers:
+      authorization: !secret lighting_api_token
+      content-type: "application/json"
+    payload: |
+      {
+        "handler": "lighting_manager",
+        "data": {
+          "zone_name": "{{ zone_name }}",
+          "light_entities": {{ light_entities | tojson }}
+        }
+      }
+
+# Alternative: Python script that can be run from Home Assistant
+python_script:
+  create_lighting_zone:
+    # Save this as /config/python_scripts/create_lighting_zone.py
+    # Call with: service: python_script.create_lighting_zone
+    sequence: |
+      zone_name = data.get('zone_name')
+      light_entities = data.get('light_entities', [])
+      
+      if not zone_name:
+          logger.error("No zone_name provided")
+          return
+      
+      # This would need custom component support
+      # Home Assistant doesn't allow direct config entry creation from python_scripts

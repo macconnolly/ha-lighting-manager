@@ -6,3 +6,11 @@ homeassistant:
   packages:
     # Zone configuration (simple, working version)
     lighting_zones: !include packages/lighting_zones_config.yaml
+    lighting_zones_setup: !include packages/lighting_zones_setup.yaml
+    
+    # Core modifier packages
+    lighting_modifier_circadian: !include packages/lighting_modifier_circadian.yaml
+    lighting_modifier_climate: !include packages/lighting_modifier_climate.yaml
+    lighting_modifier_weather: !include packages/lighting_modifier_weather.yaml
+    lighting_modifier_manual_override: !include packages/lighting_modifier_manual_override.yaml
+    lighting_modifier_motion: !include packages/lighting_modifier_motion.yaml

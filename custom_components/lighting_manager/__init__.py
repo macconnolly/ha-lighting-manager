@@ -78,9 +78,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     entry.async_on_unload(entry.add_update_listener(async_reload_entry))
     
     # Register services ONCE at domain level
-    if len(hass.data[DOMAIN]) == 1:  # First zone being set up
+    if "services_registered" not in hass.data[DOMAIN]:
         from .services import async_setup_services
         await async_setup_services(hass)
+        hass.data[DOMAIN]["services_registered"] = True
+        _LOGGER.info("Registered lighting_manager services")
     
     # Phase 2: Trigger initial calculation if there are active layers
     if any(layer.get("is_on", False) for layer in coordinator.layers.values()):
@@ -106,11 +108,19 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # Remove entry data
         hass.data[DOMAIN].pop(entry.entry_id)
         
+        # Check if any other zone entries remain, ignoring the services flag
+        other_entries_exist = any(
+            key != "services_registered" for key in hass.data[DOMAIN]
+        )
+        
         # Unregister services if this was the last zone
-        if not hass.data[DOMAIN]:
+        if not other_entries_exist:
+            _LOGGER.info("Last zone unloaded, unregistering services.")
             from .services import unload_services
             unload_services(hass)
             hass.data.pop(DOMAIN)
+        else:
+            _LOGGER.debug("Other zones still exist, services will remain registered.")
     
     return unload_ok
 

@@ -85,6 +85,18 @@ EVENT_STATE_APPLIED: Final = f"{DOMAIN}.state_applied"
 EVENT_PRESET_APPLIED: Final = f"{DOMAIN}.preset_applied"
 EVENT_ZONE_RESET: Final = f"{DOMAIN}.zone_reset"
 
+# State machine events
+EVENT_ZONE_STATE_CHANGED: Final = f"{DOMAIN}.zone_state_changed"
+EVENT_ZONE_STATE_TRANSITION_FAILED: Final = f"{DOMAIN}.zone_state_transition_failed"
+
+# Manual control events
+EVENT_MANUAL_CONTROL_DETECTED: Final = f"{DOMAIN}.manual_control_detected"
+EVENT_MANUAL_OVERRIDE_CREATED: Final = f"{DOMAIN}.manual_override_created"
+EVENT_MANUAL_OVERRIDE_CLEARED: Final = f"{DOMAIN}.manual_override_cleared"
+
+# Calculation events
+EVENT_CALCULATION_FAILED: Final = f"{DOMAIN}.calculation_failed"
+
 # Device Info
 MANUFACTURER: Final = "Lighting Manager"
 MODEL: Final = "Adaptive Zone"
